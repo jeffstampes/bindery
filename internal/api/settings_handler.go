@@ -490,6 +490,27 @@ func (h *SettingsHandler) validateSettingDependencies(ctx context.Context, key, 
 		if GetHardcoverAPIToken(ctx, h.settings) == "" {
 			return fmt.Errorf("metadata.primary_provider %q requires a Hardcover API token — add one under Settings → API Keys first", value)
 		}
+	case SettingCalibreAuthoritativeLibraryEnabled:
+		if !strings.EqualFold(value, "true") {
+			return nil
+		}
+		// Authoritative-library mode reads metadata.db out of the configured
+		// Calibre library, so enabling it without a library path would store
+		// a mode that cannot do anything. Refusing here is the same shape as
+		// the Hardcover primary-provider rule above.
+		if s, _ := h.settings.Get(ctx, SettingCalibreLibraryPath); s == nil || strings.TrimSpace(s.Value) == "" {
+			return fmt.Errorf("calibre.authoritative_library_enabled requires calibre.library_path — set the Calibre library path first")
+		}
+	case SettingCalibreLibraryPath:
+		// The same rule from the other side: clearing the library path while
+		// authoritative-library mode is on would leave the mode with nothing
+		// to read.
+		if strings.TrimSpace(value) != "" {
+			return nil
+		}
+		if s, _ := h.settings.Get(ctx, SettingCalibreAuthoritativeLibraryEnabled); s != nil && strings.EqualFold(s.Value, "true") {
+			return fmt.Errorf("calibre.library_path cannot be cleared while calibre.authoritative_library_enabled is true — turn authoritative-library mode off first")
+		}
 	case SettingHardcoverAPIToken:
 		// Same rule from the other side: clearing the token while Hardcover is
 		// the primary provider would leave the instance with a provider that
@@ -721,6 +742,14 @@ func validateSettingValue(key, value string) error {
 		default:
 			return fmt.Errorf("import.mode %q is not one of: auto, move, copy, hardlink, external", value)
 		}
+	case SettingCalibreAuthoritativeLibraryEnabled:
+		// Boolean flag; empty or "false" = off (the default). Only the two
+		// canonical values are accepted so a typo cannot be misread as
+		// truthy and quietly hand metadata authority to Calibre.
+		if value == "" || strings.EqualFold(value, "true") || strings.EqualFold(value, "false") {
+			return nil
+		}
+		return fmt.Errorf("calibre.authoritative_library_enabled %q is not one of: true, false", value)
 	case SettingCalibreMode:
 		// Canonical values only. An empty string falls through to the
 		// default (off) handled by LoadCalibreMode; anything else must

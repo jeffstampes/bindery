@@ -24,8 +24,23 @@ const (
 	// importing a Calibre library into Bindery. Off by default; when off, no
 	// startup / scheduled / manual library import runs.
 	SettingCalibreLibraryImportEnabled = "calibre.library_import_enabled"
-	SettingCalibrePluginURL            = "calibre.plugin_url"
-	SettingCalibrePluginAPIKey         = "calibre.plugin_api_key"
+	// SettingCalibreAuthoritativeLibraryEnabled is the opt-in switch for
+	// authoritative-library mode: Calibre/CWA owns the metadata of the books
+	// it actually holds, and Bindery treats metadata.db as a live read-only
+	// owned-library source instead of importing those books into its own
+	// catalogue. Off by default, and every existing Calibre flow behaves
+	// exactly as it did while it is off.
+	//
+	// Today the value is configuration only. The owned-library read path,
+	// work-to-book matching, owned-state reconciliation and the metadata
+	// audit are separate later slices; the design contract those slices must
+	// honour is docs/design/calibre-authoritative-library.md. The one rule
+	// the key carries now lives in validateSettingDependencies: the mode
+	// reads metadata.db out of calibre.library_path, so it cannot be turned
+	// on without one, and the path cannot be cleared while it is on.
+	SettingCalibreAuthoritativeLibraryEnabled = "calibre.authoritative_library_enabled"
+	SettingCalibrePluginURL                   = "calibre.plugin_url"
+	SettingCalibrePluginAPIKey                = "calibre.plugin_api_key"
 	// SettingCalibrePushPathRemap translates Bindery library paths to the
 	// prefix the Calibre (Bridge plugin) container sees before a push, in
 	// pathmap "from:to[,from:to]" form — e.g. "/books:/mnt/user/media/books".

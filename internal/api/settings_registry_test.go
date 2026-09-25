@@ -323,6 +323,11 @@ func TestValidateSettingValue_KnownKeysUnchanged(t *testing.T) {
 		{"audiobook file template accepts empty", SettingNamingAudiobookFileTemplate, "", false},
 		{"audiobook file template rejects a template without Part", SettingNamingAudiobookFileTemplate, "{Title}", true},
 
+		{"authoritative library accepts true", SettingCalibreAuthoritativeLibraryEnabled, "true", false},
+		{"authoritative library accepts false", SettingCalibreAuthoritativeLibraryEnabled, "false", false},
+		{"authoritative library accepts empty", SettingCalibreAuthoritativeLibraryEnabled, "", false},
+		{"authoritative library rejects other", SettingCalibreAuthoritativeLibraryEnabled, "yes", true},
+
 		{"calibre mode accepts calibredb", SettingCalibreMode, "calibredb", false},
 		{"calibre mode accepts empty", SettingCalibreMode, "", false},
 		{"calibre mode rejects the removed drop_folder", SettingCalibreMode, "drop_folder", true},
@@ -433,6 +438,7 @@ var webSettingKeys = []string{
 	"author.default_monitor_mode",
 	"authors.discovery.interval",
 	"autoGrab.enabled",
+	"calibre.authoritative_library_enabled",
 	"calibre.binary_path",
 	"calibre.library_import_enabled",
 	"calibre.library_path",

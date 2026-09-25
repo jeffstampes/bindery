@@ -62,9 +62,11 @@ function CalibreSection({
   saveSetting: (key: string) => Promise<string | null>
   saving: string | null
 }) {
+  const { t } = useTranslation()
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
   const [saveError, setSaveError] = useState<{ key: string; msg: string } | null>(null)
+  const [authoritativeSaveError, setAuthoritativeSaveError] = useState<string | null>(null)
   const [libraryPathSaveResult, libraryPathSave] = useSaveResult()
   const [binaryPathSaveResult, binaryPathSave] = useSaveResult()
   const [pluginUrlSaveResult, pluginUrlSave] = useSaveResult()
@@ -104,6 +106,7 @@ function CalibreSection({
       : 'off'
   const libraryImportEnabled = (settings['calibre.library_import_enabled'] ?? 'false').toLowerCase() === 'true'
   const syncOnStartup = (settings['calibre.sync_on_startup'] ?? 'false').toLowerCase() === 'true'
+  const authoritativeLibrary = (settings['calibre.authoritative_library_enabled'] ?? 'false').toLowerCase() === 'true'
   const lastImportAt = settings['calibre.last_import_at'] ?? ''
 
   // Hydrate progress on mount so navigating back mid-import still shows
@@ -530,6 +533,49 @@ function CalibreSection({
               />
             </>
           )}
+        </div>
+
+        {/* Authoritative-library mode (#2): Calibre/CWA owns the metadata of
+            the books it already holds. Off by default; nothing about the
+            existing Calibre behaviour changes while it is off. */}
+        <div className="pt-3 border-t border-slate-200 dark:border-zinc-800 space-y-2">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200">
+                {t('settings.calibre.authoritative.label', 'Calibre is authoritative for owned books')}
+              </label>
+              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">
+                {t('settings.calibre.authoritative.hint', "Treat Calibre/CWA as the authority for the metadata of books it already holds. Bindery reads metadata.db read-only and never writes to it, and keeps owning what it is good at: monitored authors, wanted books, external catalogue metadata and acquisition. Off by default; while it is off every Calibre behaviour above is unchanged.")}
+              </p>
+              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-1">
+                {t('settings.calibre.authoritative.staged', 'Enabling this records the choice. Owned-book matching and the metadata audit arrive in later releases, so nothing changes in the catalogue yet.')}
+              </p>
+              {authoritativeSaveError && (
+                <p className="text-xs text-red-600 dark:text-red-400 mt-1">{authoritativeSaveError}</p>
+              )}
+            </div>
+            <Toggle
+              checked={authoritativeLibrary}
+              onChange={async () => {
+                const next = authoritativeLibrary ? 'false' : 'true'
+                setAuthoritativeSaveError(null)
+                try {
+                  await api.setSetting('calibre.authoritative_library_enabled', next)
+                  setSettings(s => ({ ...s, 'calibre.authoritative_library_enabled': next }))
+                } catch (err) {
+                  // The backend refuses to enable the mode without a library
+                  // path. Surface that instead of flipping the switch to a
+                  // state the server did not accept.
+                  setAuthoritativeSaveError(err instanceof Error ? err.message : 'Save failed')
+                }
+              }}
+              title={
+                authoritativeLibrary
+                  ? t('settings.calibre.authoritative.disable', 'Disable authoritative-library mode')
+                  : t('settings.calibre.authoritative.enable', 'Enable authoritative-library mode')
+              }
+            />
+          </div>
         </div>
       </div>
 
