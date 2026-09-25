@@ -548,7 +548,7 @@ function CalibreSection({
                 {t('settings.calibre.authoritative.hint', "Treat Calibre/CWA as the authority for the metadata of books it already holds. Bindery reads metadata.db read-only and never writes to it, and keeps owning what it is good at: monitored authors, wanted books, external catalogue metadata and acquisition. Off by default; while it is off every Calibre behaviour above is unchanged.")}
               </p>
               <p className="text-xs text-slate-600 dark:text-zinc-500 mt-1">
-                {t('settings.calibre.authoritative.staged', 'Enabling this records the choice. Owned-book matching and the metadata audit arrive in later releases, so nothing changes in the catalogue yet.')}
+                {t('settings.calibre.authoritative.staged', 'Calibre/CWA becomes the authority for owned-book metadata. Enabling this records your choice; owned-book matching and audit arrive later, so nothing changes immediately.')}
               </p>
               {authoritativeSaveError && (
                 <p className="text-xs text-red-600 dark:text-red-400 mt-1">{authoritativeSaveError}</p>

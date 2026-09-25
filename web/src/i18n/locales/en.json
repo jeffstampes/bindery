@@ -748,8 +748,8 @@
     "calibre": {
       "authoritative": {
         "label": "Calibre is authoritative for owned books",
-        "hint": "Treat Calibre/CWA as the authority for the metadata of books it already holds. Bindery reads metadata.db read-only and never writes to it, and keeps owning what it is good at: monitored authors, wanted books, external catalogue metadata and acquisition. Off by default; while it is off every Calibre behaviour above is unchanged.",
-        "staged": "Enabling this records the choice. Owned-book matching and the metadata audit arrive in later releases, so nothing changes in the catalogue yet.",
+        "hint": "Treat Calibre/CWA as the authority for the metadata of books it already holds. Bindery reads metadata.db read-only and never writes to it, and keeps owning what it is good at: monitored authors, wanted books, external catalogue metadata and acquisition.",
+        "staged": "Calibre/CWA becomes the authority for owned-book metadata. Enabling this records your choice; owned-book matching and audit arrive later, so nothing changes immediately.",
         "enable": "Enable authoritative-library mode",
         "disable": "Disable authoritative-library mode"
       },

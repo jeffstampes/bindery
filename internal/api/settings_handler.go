@@ -927,6 +927,17 @@ func (h *SettingsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "this secret setting cannot be deleted through the generic settings API"})
 		return
 	}
+	// Guard: calibre.library_path must not disappear while authoritative mode
+	is on — the flag depends on that path to locate metadata.db.
+	if key == SettingCalibreLibraryPath {
+		authOn, _ := h.settings.Get(r.Context(), SettingCalibreAuthoritativeLibraryEnabled)
+		if authOn != nil && strings.EqualFold(strings.TrimSpace(authOn.Value), "true") {
+			writeJSON(w, http.StatusPreconditionFailed, map[string]string{
+				"error": "cannot remove Calibre library path while authoritative mode is enabled",
+			})
+			return
+		}
+	}
 	if err := h.settings.Delete(r.Context(), key); err != nil {
 		writeServerError(w, r, err)
 		return

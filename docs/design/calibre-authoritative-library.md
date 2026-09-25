@@ -97,8 +97,7 @@ no environment variable, no migration.
   discoverable without a client hard-coding it.
 - Rendered on **Settings → Calibre**, under the read-side section, next to
   Library import. All of its user-facing text flows through `useTranslation`.
-- Only `true` and `false` are accepted. Empty or unset reads as off; a typo is
-  refused at save time rather than being interpreted as truthy.
+- Only `true` is accepted; anything non-bool (including empty) reads as false.
 
 ### Dependency rule
 
