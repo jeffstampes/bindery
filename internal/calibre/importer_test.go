@@ -882,3 +882,52 @@ func TestImporter_RegisterBookFilesIgnoresUnusableBooks(t *testing.T) {
 	noRepo := &Importer{}
 	noRepo.registerBookFiles(context.Background(), 0, &models.Book{ID: 1}, cb)
 }
+
+func TestImporter_AuthoritativeMode_ManualAndScheduledImportNoShadowBooks(t *testing.T) {
+	imp, fr, _, bookRepo, _, _, settingsRepo := newImporterFixture(t)
+	ctx := context.Background()
+
+	root := buildFixtureLibrary(t)
+	_ = settingsRepo.Set(ctx, "calibre.authoritative_library_enabled", "true")
+	_ = settingsRepo.Set(ctx, "calibre.library_path", root)
+
+	dbConn, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory: %v", err)
+	}
+	t.Cleanup(func() { dbConn.Close() })
+
+	crossRefRepo := db.NewCalibreCrossReferenceRepo(dbConn)
+	authSvc := NewAuthoritativeService(settingsRepo, crossRefRepo, bookRepo)
+	imp.WithAuthoritativeService(authSvc)
+
+	// Fake reader has books, but in authoritative mode legacy import MUST NOT run.
+	fr.books = []CalibreBook{sampleCalibreBook(100, "Unwanted Shadow Book", "Shadow Author")}
+
+	// 1. Manual import via Run
+	stats, err := imp.Run(ctx, root)
+	if err != nil {
+		t.Fatalf("Run in authoritative mode failed: %v", err)
+	}
+	if stats.BooksAdded != 0 || stats.AuthorsAdded != 0 {
+		t.Errorf("stats: booksAdded=%d, authorsAdded=%d; want 0/0 (no legacy catalogue import)", stats.BooksAdded, stats.AuthorsAdded)
+	}
+
+	books, err := bookRepo.ListIncludingExcluded(ctx)
+	if err != nil {
+		t.Fatalf("list books: %v", err)
+	}
+	if len(books) != 0 {
+		t.Fatalf("found %d books in Bindery catalogue after manual import in authoritative mode; want 0 (no shadow books created)", len(books))
+	}
+
+	// 2. Scheduled import via RunSync
+	imp.RunSync(ctx)
+	booksAfterSync, err := bookRepo.ListIncludingExcluded(ctx)
+	if err != nil {
+		t.Fatalf("list books: %v", err)
+	}
+	if len(booksAfterSync) != 0 {
+		t.Fatalf("found %d books in Bindery catalogue after scheduled sync in authoritative mode; want 0", len(booksAfterSync))
+	}
+}

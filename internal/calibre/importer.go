@@ -77,6 +77,8 @@ type Importer struct {
 	// populated.
 	covers *covers.Store
 
+	authoritative *AuthoritativeService
+
 	openReader func(libraryPath string) (readerIface, error)
 
 	mu       sync.Mutex
@@ -141,6 +143,13 @@ func (i *Importer) WithSeries(series *db.SeriesRepo) *Importer {
 // proxy serves bindery-cover: references from.
 func (i *Importer) WithCoverStore(store *covers.Store) *Importer {
 	i.covers = store
+	return i
+}
+
+// WithAuthoritativeService attaches the AuthoritativeService so authoritative library
+// reconciliation runs automatically after a Calibre import completes (#5).
+func (i *Importer) WithAuthoritativeService(auth *AuthoritativeService) *Importer {
+	i.authoritative = auth
 	return i
 }
 
@@ -256,6 +265,23 @@ func (i *Importer) run(ctx context.Context, libraryPath string) *ImportStats {
 			}
 		}
 	}()
+
+	if i.authoritative != nil && i.authoritative.IsEnabled(ctx) {
+		slog.Info("calibre import: authoritative mode enabled — running reconciliation instead of catalogue import")
+		i.setProgress(func(p *ImportProgress) {
+			p.Message = "reconciling authoritative library…"
+		})
+		if res, err := i.authoritative.Reconcile(ctx); err != nil {
+			failed = true
+			i.fail(err)
+		} else if res != nil {
+			slog.Info("calibre import: authoritative reconciliation finished", "result", res)
+			i.setProgress(func(p *ImportProgress) {
+				p.Message = "done"
+			})
+		}
+		return stats
+	}
 
 	reader, err := i.openReader(libraryPath)
 	if err != nil {
@@ -1083,6 +1109,19 @@ func (i *Importer) upsertEdition(ctx context.Context, runID int64, book *models.
 // if Calibre is unconfigured or already running, it logs and returns without
 // blocking the job loop.
 func (i *Importer) RunSync(ctx context.Context) {
+	// When authoritative mode is enabled, scheduled Calibre sync runs authoritative
+	// reconciliation (updating cross-references) rather than legacy catalogue import
+	// (creating shadow Book rows in Bindery's catalogue).
+	if i.authoritative != nil && i.authoritative.IsEnabled(ctx) {
+		slog.Info("calibre scheduler sync: running authoritative reconciliation pass")
+		if res, err := i.authoritative.Reconcile(ctx); err != nil {
+			slog.Warn("calibre scheduler sync: authoritative reconciliation failed", "error", err)
+		} else if res != nil {
+			slog.Info("calibre scheduler sync: authoritative reconciliation finished", "result", res)
+		}
+		return
+	}
+
 	// Opt-in gate (calibre.library_import_enabled): the scheduled sync must not
 	// run when the operator has library import turned off, even if a library
 	// path is still configured. Existing installs are backfilled to enabled by

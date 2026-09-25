@@ -15,6 +15,7 @@ import (
 
 	"github.com/robfig/cron/v3"
 
+	"github.com/vavallee/bindery/internal/calibre"
 	"github.com/vavallee/bindery/internal/concurrency"
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/decision"
@@ -32,6 +33,16 @@ import (
 // keeps the scheduler package free of a direct import of the calibre package.
 type CalibreSyncer interface {
 	RunSync(ctx context.Context)
+}
+
+// AuthoritativeService is the narrow interface the scheduler uses for
+// Calibre/CWA authoritative-library mode reconciliation and ownership checks.
+type AuthoritativeService interface {
+	IsEnabled(ctx context.Context) bool
+	IsOwned(ctx context.Context, book *models.Book) bool
+	IsOwnedForFormat(ctx context.Context, book *models.Book, format string) bool
+	FilterWantedBooks(ctx context.Context, books []models.Book) []models.Book
+	Reconcile(ctx context.Context) (*calibre.ReconcileResult, error)
 }
 
 // bookSearcher is the narrow interface the scheduler uses for indexer
@@ -197,6 +208,7 @@ type Scheduler struct {
 	qualityProfiles *db.QualityProfileRepo  // optional; enforces the profile's allowed formats on auto-grab (#1693)
 	editions        *db.EditionRepo         // optional; supplies the book ISBN the ranker's exact-match bonus needs (#1724)
 	calibreSyncer   CalibreSyncer           // optional; nil if Calibre is not configured
+	authoritative   AuthoritativeService    // optional; Calibre/CWA authoritative mode
 	recommender     RecommendationEngine    // optional; generates recommendations
 	// operatorUserID resolves the user the recommendation job writes under.
 	// Optional; nil falls back to the historical hardcoded admin id (#1725).
@@ -351,6 +363,11 @@ func (s *Scheduler) WithCalibreSyncer(syncer CalibreSyncer) {
 	s.calibreSyncer = syncer
 }
 
+// WithAuthoritativeService registers an AuthoritativeService for Calibre/CWA mode.
+func (s *Scheduler) WithAuthoritativeService(auth AuthoritativeService) {
+	s.authoritative = auth
+}
+
 // WithRecommender registers a recommendation engine that runs every 24 hours.
 // Must be called before Start.
 func (s *Scheduler) WithRecommender(engine RecommendationEngine) {
@@ -490,6 +507,20 @@ func (s *Scheduler) Start() {
 		s.cron.AddFunc("@every 24h", runJob("calibre-sync", func() {
 			slog.Info("job: calibre library sync")
 			s.calibreSyncer.RunSync(s.ctx())
+		}))
+	}
+
+	// Reconcile Calibre authoritative library every 24 hours when authoritative mode is active.
+	if s.authoritative != nil {
+		s.cron.AddFunc("@every 24h", runJob("calibre-authoritative-reconcile", func() {
+			slog.Info("job: calibre authoritative library reconciliation")
+			if s.authoritative.IsEnabled(s.ctx()) {
+				if res, err := s.authoritative.Reconcile(s.ctx()); err != nil {
+					slog.Warn("authoritative library reconciliation failed", "error", err)
+				} else if res != nil {
+					slog.Info("authoritative library reconciliation finished", "result", res)
+				}
+			}
 		}))
 	}
 
@@ -638,6 +669,11 @@ func (s *Scheduler) searchAndGrabFormats(ctx context.Context, book models.Book, 
 		return
 	}
 	for _, mediaType := range formats {
+		if s.authoritative != nil && s.authoritative.IsOwnedForFormat(ctx, &book, mediaType) {
+			slog.Info("format is owned in authoritative Calibre library, skipping search",
+				"book_id", book.ID, "title", book.Title, "format", mediaType)
+			continue
+		}
 		s.searchAndGrabFormat(ctx, book, mediaType, sweep)
 	}
 }
@@ -1418,6 +1454,9 @@ func (s *Scheduler) wantedSearchQueue(ctx context.Context) []wantedSearch {
 	if err != nil {
 		slog.Error("failed to list wanted books", "error", err)
 		return nil
+	}
+	if s.authoritative != nil {
+		wanted = s.authoritative.FilterWantedBooks(ctx, wanted)
 	}
 	if len(wanted) == 0 {
 		return nil

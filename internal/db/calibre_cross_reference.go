@@ -167,6 +167,37 @@ func (r *CalibreCrossReferenceRepo) ListByStatus(ctx context.Context, status str
 	return out, nil
 }
 
+func (r *CalibreCrossReferenceRepo) GetMatchedMap(ctx context.Context) (map[int64]models.CalibreWorkCrossReference, error) {
+	rows, err := r.exec.QueryContext(ctx, `
+		SELECT id, book_id, calibre_id, match_method, confidence, status,
+		       calibre_fingerprint, match_details_json, created_at, updated_at
+		FROM calibre_work_cross_references
+		WHERE status = ?`, models.CalibreMatchStatusMatched)
+	if err != nil {
+		return nil, fmt.Errorf("get matched cross references map: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[int64]models.CalibreWorkCrossReference)
+	for rows.Next() {
+		var ref models.CalibreWorkCrossReference
+		var createdAt, updatedAt string
+		if err := rows.Scan(
+			&ref.ID, &ref.BookID, &ref.CalibreID, &ref.MatchMethod, &ref.Confidence,
+			&ref.Status, &ref.CalibreFingerprint, &ref.MatchDetailsJSON,
+			&createdAt, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scan calibre cross reference: %w", err)
+		}
+		ref.CreatedAt = parseDBTime(createdAt)
+		ref.UpdatedAt = parseDBTime(updatedAt)
+		out[ref.BookID] = ref
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate matched cross references: %w", err)
+	}
+	return out, nil
+}
+
 func (r *CalibreCrossReferenceRepo) DeleteByBookID(ctx context.Context, bookID int64) error {
 	_, err := r.exec.ExecContext(ctx, `DELETE FROM calibre_work_cross_references WHERE book_id = ?`, bookID)
 	if err != nil {

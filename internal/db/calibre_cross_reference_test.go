@@ -90,13 +90,21 @@ func TestCalibreCrossReferenceRepo_CRUD(t *testing.T) {
 		t.Fatalf("GetByCalibreID(101) got %+v, want book %d", byCalibre, b1.ID)
 	}
 
-	// 6. ListByStatus
+	// 6. ListByStatus and GetMatchedMap
 	matched, err := repo.ListByStatus(ctx, models.CalibreMatchStatusMatched)
 	if err != nil {
 		t.Fatalf("ListByStatus matched: %v", err)
 	}
 	if len(matched) != 1 || matched[0].BookID != b1.ID {
 		t.Fatalf("ListByStatus(matched) got %+v, want 1 entry for book %d", matched, b1.ID)
+	}
+
+	matchedMap, err := repo.GetMatchedMap(ctx)
+	if err != nil {
+		t.Fatalf("GetMatchedMap: %v", err)
+	}
+	if len(matchedMap) != 1 || matchedMap[b1.ID].CalibreID != 101 {
+		t.Fatalf("GetMatchedMap got %+v, want b1 (ID %d)", matchedMap, b1.ID)
 	}
 
 	ambiguous, err := repo.ListByStatus(ctx, models.CalibreMatchStatusAmbiguous)
