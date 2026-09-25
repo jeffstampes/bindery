@@ -265,17 +265,9 @@ func (r *Reader) Books(ctx context.Context, fn func(CalibreBook) error) error {
 			return err
 		}
 
-		cb.Identifiers, err = r.loadIdentifiers(ctx, cb.CalibreID)
+		cb.ISBN, err = r.loadISBN(ctx, cb.CalibreID)
 		if err != nil {
 			return err
-		}
-		if isbn, ok := cb.Identifiers["isbn"]; ok && isbn != "" {
-			cb.ISBN = isbn
-		} else {
-			cb.ISBN, err = r.loadISBN(ctx, cb.CalibreID)
-			if err != nil {
-				return err
-			}
 		}
 
 		cb.Language, err = r.loadLanguage(ctx, cb.CalibreID)
