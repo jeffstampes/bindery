@@ -125,14 +125,14 @@ an instance can never be locked into it.
 Not implemented. Listed so each one can be checked against the invariants above
 rather than re-derived.
 
-| Slice | Scope | Key invariants |
-|---|---|---|
-| Live read-only owned library | Read `metadata.db` as a live owned-book source | 3, 9 |
-| Work ↔ Calibre matching | Identifier-first matching, conservative author/title fallback, with provenance and confidence | 4, 5, 9 |
-| Owned-state integration | A confident match marks a Bindery work owned/satisfied, without importing its metadata | 4, 5 |
-| Metadata audit | Compare Calibre's metadata for owned books against provider metadata and report | 6, 7, 9 |
-| Audit/review UI | Surface discrepancies for human decision | 7 |
-| `BinderyMismatch` write-back | Optional, separately opt-in, one Bindery-owned tag | 3, 8 |
+| Slice | Status | Scope | Key invariants |
+|---|---|---|---|
+| Live read-only owned library | Implemented (#3) | Read `metadata.db` as a live owned-book source | 3, 9 |
+| Work ↔ Calibre matching | Planned (#4) | Identifier-first matching, conservative author/title fallback, with provenance and confidence | 4, 5, 9 |
+| Owned-state integration | Planned (#5) | A confident match marks a Bindery work owned/satisfied, without importing its metadata | 4, 5 |
+| Metadata audit | Planned (#6) | Compare Calibre's metadata for owned books against provider metadata and report | 6, 7, 9 |
+| Audit/review UI | Planned (#7) | Surface discrepancies for human decision | 7 |
+| `BinderyMismatch` write-back | Planned (#8) | Optional, separately opt-in, one Bindery-owned tag | 3, 8 |
 
 Matching, owned-state reconciliation, metadata auditing and Calibre write-back
 are **explicitly out of scope** for the configuration slice. Enabling the setting

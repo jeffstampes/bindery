@@ -36,10 +36,13 @@ type Config struct {
 	// backfilled to true by migration 070 so the gate never disables a working
 	// import.
 	LibraryImportEnabled bool
-	SyncOnStartup        bool   // run a library import when Bindery starts
-	PluginURL            string // base URL of the Bindery Bridge Calibre plugin (mode=plugin)
-	PluginAPIKey         string // bearer token for the plugin's HTTP API (mode=plugin)
-	PushPathRemap        string // pathmap "from:to" pairs translating Bindery paths to the plugin container's mounts (#1346)
+	// AuthoritativeLibraryEnabled records operator intent for
+	// authoritative-library mode (Calibre/CWA owns metadata of books it holds).
+	AuthoritativeLibraryEnabled bool
+	SyncOnStartup               bool   // run a library import when Bindery starts
+	PluginURL                   string // base URL of the Bindery Bridge Calibre plugin (mode=plugin)
+	PluginAPIKey                string // bearer token for the plugin's HTTP API (mode=plugin)
+	PushPathRemap               string // pathmap "from:to" pairs translating Bindery paths to the plugin container's mounts (#1346)
 }
 
 // runner is the shape of exec.CommandContext, abstracted for tests.

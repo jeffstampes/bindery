@@ -78,6 +78,11 @@ func TestCalibreAuthoritativeLibrary_LeavesExistingCalibreConfigAlone(t *testing
 	}
 	after := LoadCalibreConfig(ctx, repo)
 
+	if !after.AuthoritativeLibraryEnabled {
+		t.Error("expected AuthoritativeLibraryEnabled to be true after enabling")
+	}
+	// The write-side configuration fields must remain identical.
+	before.AuthoritativeLibraryEnabled = true
 	if before != after {
 		t.Errorf("enabling authoritative-library mode changed the Calibre config\n before %+v\n  after %+v", before, after)
 	}
