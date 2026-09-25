@@ -24,6 +24,25 @@ const metadataDB = "metadata.db"
 // 500 — it usually means the user pointed library_path at the wrong folder.
 var ErrMissingMetadataDB = errors.New("calibre metadata.db not found in library_path")
 
+// ErrBookNotFound is returned when a requested book ID is not found in Calibre.
+var ErrBookNotFound = errors.New("calibre book not found")
+
+// ErrAuthoritativeDisabled is returned when authoritative library mode is not enabled
+// or no library path is set.
+var ErrAuthoritativeDisabled = errors.New("calibre authoritative library disabled or library path empty")
+
+// AuthoritativeLibrary is the read-only view of a live Calibre/CWA library
+// used by authoritative mode to query owned books without importing them
+// into Bindery's catalogue.
+type AuthoritativeLibrary interface {
+	Count(ctx context.Context) (int, error)
+	GetBook(ctx context.Context, id int64) (*CalibreBook, error)
+	Books(ctx context.Context, fn func(CalibreBook) error) error
+	AllBooks(ctx context.Context) ([]CalibreBook, error)
+	FindByIdentifier(ctx context.Context, idType, idVal string) ([]CalibreBook, error)
+	Close() error
+}
+
 // CalibreBook is the importer-facing view of one Calibre book row, joined
 // with its authors, series, identifiers and formats. Field names match
 // Bindery conventions (not Calibre's column names) so the importer can pass
@@ -42,8 +61,9 @@ type CalibreBook struct {
 	Authors     []CalibreAuthor
 	Series      *CalibreSeries
 	Formats     []CalibreFormat
-	CoverPath   string // absolute path to cover.jpg if present; empty if not
-	LibraryPath string // absolute path to this book's folder inside the library
+	CoverPath   string            // absolute path to cover.jpg if present; empty if not
+	LibraryPath string            // absolute path to this book's folder inside the library
+	Identifiers map[string]string // Calibre identifiers (e.g. isbn, asin, openlibrary, google, hardcover, etc.)
 }
 
 // CalibreAuthor captures a single authors row. Calibre books can have N
@@ -105,6 +125,21 @@ func OpenReader(libraryPath string) (*Reader, error) {
 		return nil, err
 	}
 	return &Reader{libraryPath: abs, db: conn}, nil
+}
+
+// OpenAuthoritativeReader opens a Calibre library's metadata.db read-only and
+// returns an AuthoritativeLibrary interface.
+func OpenAuthoritativeReader(libraryPath string) (AuthoritativeLibrary, error) {
+	return OpenReader(libraryPath)
+}
+
+// OpenAuthoritativeLibraryFromConfig opens the Calibre library for authoritative reading
+// if cfg.AuthoritativeLibraryEnabled is true and cfg.LibraryPath is non-empty.
+func OpenAuthoritativeLibraryFromConfig(cfg Config) (AuthoritativeLibrary, error) {
+	if !cfg.AuthoritativeLibraryEnabled || strings.TrimSpace(cfg.LibraryPath) == "" {
+		return nil, ErrAuthoritativeDisabled
+	}
+	return OpenReader(cfg.LibraryPath)
 }
 
 // openReadOnly opens dbPath with `mode=ro` and verifies a read actually
@@ -230,9 +265,17 @@ func (r *Reader) Books(ctx context.Context, fn func(CalibreBook) error) error {
 			return err
 		}
 
-		cb.ISBN, err = r.loadISBN(ctx, cb.CalibreID)
+		cb.Identifiers, err = r.loadIdentifiers(ctx, cb.CalibreID)
 		if err != nil {
 			return err
+		}
+		if isbn, ok := cb.Identifiers["isbn"]; ok && isbn != "" {
+			cb.ISBN = isbn
+		} else {
+			cb.ISBN, err = r.loadISBN(ctx, cb.CalibreID)
+			if err != nil {
+				return err
+			}
 		}
 
 		cb.Language, err = r.loadLanguage(ctx, cb.CalibreID)
@@ -443,4 +486,359 @@ func parseCalibreDate(s string) *time.Time {
 func fileExists(p string) bool {
 	info, err := os.Stat(p)
 	return err == nil && !info.IsDir()
+}
+
+// GetBook returns the single CalibreBook record for the given Calibre ID,
+// including its authors, series, formats, identifiers, language, and cover path.
+// Returns ErrBookNotFound if no book with that ID exists.
+func (r *Reader) GetBook(ctx context.Context, id int64) (*CalibreBook, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("reader is nil or closed")
+	}
+
+	row := r.db.QueryRowContext(ctx, `
+		SELECT b.id, COALESCE(b.title, ''), COALESCE(b.sort, ''), b.pubdate,
+		       COALESCE(b.path, ''), b.series_index, COALESCE(s.name, '')
+		FROM books b
+		LEFT JOIN books_series_link bsl ON bsl.book = b.id
+		LEFT JOIN series s               ON s.id   = bsl.series
+		WHERE b.id = ?`, id)
+
+	var (
+		cb          CalibreBook
+		pubdate     sql.NullString
+		relPath     string
+		seriesIndex sql.NullString
+		seriesName  string
+	)
+	if err := row.Scan(&cb.CalibreID, &cb.Title, &cb.SortTitle, &pubdate,
+		&relPath, &seriesIndex, &seriesName); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrBookNotFound
+		}
+		return nil, fmt.Errorf("get book %d: %w", id, err)
+	}
+
+	cb.PublishDate = parseCalibreDate(pubdate.String)
+	cb.LibraryPath = filepath.Join(r.libraryPath, relPath)
+	if seriesName != "" {
+		cb.Series = &CalibreSeries{
+			Name:     seriesName,
+			Position: parseSeriesIndex(seriesIndex.String),
+		}
+	}
+
+	authors, err := r.loadAuthors(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	cb.Authors = authors
+
+	formats, err := r.loadFormats(ctx, id, cb.LibraryPath)
+	if err != nil {
+		return nil, err
+	}
+	cb.Formats = formats
+
+	identifiers, err := r.loadIdentifiers(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	cb.Identifiers = identifiers
+	if isbn, ok := identifiers["isbn"]; ok && isbn != "" {
+		cb.ISBN = isbn
+	} else {
+		isbn, err := r.loadISBN(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		cb.ISBN = isbn
+	}
+
+	lang, err := r.loadLanguage(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	cb.Language = lang
+
+	if cover := filepath.Join(cb.LibraryPath, "cover.jpg"); fileExists(cover) {
+		cb.CoverPath = cover
+	}
+
+	return &cb, nil
+}
+
+// FindByIdentifier searches the live Calibre library for books matching an
+// identifier (e.g. idType "isbn", "asin", "goodreads", "openlibrary", "hardcover").
+// Returns a slice of matching CalibreBook records (empty slice if none matched).
+func (r *Reader) FindByIdentifier(ctx context.Context, idType, idVal string) ([]CalibreBook, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("reader is nil or closed")
+	}
+
+	idTypeClean := cleanIdentifierType(idType)
+	idValClean := cleanIdentifierValue(idVal)
+	if idTypeClean == "" || idValClean == "" {
+		return nil, nil
+	}
+
+	idValLower := strings.ToLower(idValClean)
+	idValStripped := strings.ReplaceAll(idValLower, "-", "")
+
+	var rows *sql.Rows
+	var err error
+
+	if idTypeClean == "isbn" && idValStripped != idValLower {
+		rows, err = r.db.QueryContext(ctx, `
+			SELECT DISTINCT book
+			FROM identifiers
+			WHERE LOWER(type) = ? AND (LOWER(val) = ? OR LOWER(val) = ? OR REPLACE(LOWER(val), '-', '') = ?)
+			ORDER BY book`, idTypeClean, idValLower, idValStripped, idValStripped)
+	} else if idTypeClean == "isbn" {
+		rows, err = r.db.QueryContext(ctx, `
+			SELECT DISTINCT book
+			FROM identifiers
+			WHERE LOWER(type) = ? AND (LOWER(val) = ? OR REPLACE(LOWER(val), '-', '') = ?)
+			ORDER BY book`, idTypeClean, idValLower, idValStripped)
+	} else {
+		rows, err = r.db.QueryContext(ctx, `
+			SELECT DISTINCT book
+			FROM identifiers
+			WHERE LOWER(type) = ? AND LOWER(val) = ?
+			ORDER BY book`, idTypeClean, idValLower)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find books by identifier (%s=%s): %w", idType, idVal, err)
+	}
+	defer rows.Close()
+
+	var bookIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan identifier book id: %w", err)
+		}
+		bookIDs = append(bookIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var out []CalibreBook
+	for _, id := range bookIDs {
+		b, err := r.GetBook(ctx, id)
+		if err != nil {
+			if errors.Is(err, ErrBookNotFound) {
+				continue
+			}
+			return nil, err
+		}
+		out = append(out, *b)
+	}
+	return out, nil
+}
+
+// AllBooks returns all books in the Calibre library using bulk SQL queries,
+// avoiding per-book N+1 roundtrips. This is designed for high performance
+// on large (~80,000 book) libraries.
+func (r *Reader) AllBooks(ctx context.Context) ([]CalibreBook, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("reader is nil or closed")
+	}
+
+	headers, err := r.listBookHeaders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(headers) == 0 {
+		return nil, nil
+	}
+
+	authorsMap, err := r.loadAllAuthors(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	formatsMap, err := r.loadAllFormats(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	identifiersMap, err := r.loadAllIdentifiers(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	languagesMap, err := r.loadAllLanguages(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range headers {
+		id := headers[i].CalibreID
+		headers[i].Authors = authorsMap[id]
+		headers[i].Formats = formatsMap[id]
+		if ids, ok := identifiersMap[id]; ok {
+			headers[i].Identifiers = ids
+			headers[i].ISBN = ids["isbn"]
+		} else {
+			headers[i].Identifiers = make(map[string]string)
+		}
+		headers[i].Language = languagesMap[id]
+
+		if cover := filepath.Join(headers[i].LibraryPath, "cover.jpg"); fileExists(cover) {
+			headers[i].CoverPath = cover
+		}
+	}
+
+	return headers, nil
+}
+
+func (r *Reader) loadIdentifiers(ctx context.Context, bookID int64) (map[string]string, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT type, val
+		FROM identifiers
+		WHERE book = ?
+		ORDER BY id`, bookID)
+	if err != nil {
+		return nil, fmt.Errorf("load identifiers for book %d: %w", bookID, err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]string)
+	for rows.Next() {
+		var typ, val string
+		if err := rows.Scan(&typ, &val); err != nil {
+			return nil, fmt.Errorf("scan identifier: %w", err)
+		}
+		typ = cleanIdentifierType(typ)
+		val = cleanIdentifierValue(val)
+		if typ != "" && val != "" {
+			if _, exists := out[typ]; !exists {
+				out[typ] = val
+			}
+		}
+	}
+	return out, rows.Err()
+}
+
+func (r *Reader) loadAllAuthors(ctx context.Context) (map[int64][]CalibreAuthor, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT bal.book, a.id, a.name, COALESCE(a.sort, '')
+		FROM authors a
+		JOIN books_authors_link bal ON bal.author = a.id
+		ORDER BY bal.book, bal.id`)
+	if err != nil {
+		return nil, fmt.Errorf("load all authors: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[int64][]CalibreAuthor)
+	for rows.Next() {
+		var (
+			bookID int64
+			a      CalibreAuthor
+		)
+		if err := rows.Scan(&bookID, &a.CalibreID, &a.Name, &a.Sort); err != nil {
+			return nil, fmt.Errorf("scan author: %w", err)
+		}
+		a.Name = strings.ReplaceAll(a.Name, "|", ",")
+		a.Sort = strings.ReplaceAll(a.Sort, "|", ",")
+		out[bookID] = append(out[bookID], a)
+	}
+	return out, rows.Err()
+}
+
+func (r *Reader) loadAllFormats(ctx context.Context) (map[int64][]CalibreFormat, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT d.book, d.format, d.name, d.uncompressed_size, COALESCE(b.path, '')
+		FROM data d
+		JOIN books b ON b.id = d.book
+		ORDER BY d.book, d.id`)
+	if err != nil {
+		return nil, fmt.Errorf("load all formats: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[int64][]CalibreFormat)
+	for rows.Next() {
+		var (
+			bookID  int64
+			f       CalibreFormat
+			relPath string
+		)
+		if err := rows.Scan(&bookID, &f.Format, &f.FileName, &f.SizeBytes, &relPath); err != nil {
+			return nil, fmt.Errorf("scan format: %w", err)
+		}
+		f.Format = strings.ToUpper(strings.TrimSpace(f.Format))
+		if f.Format != "" && f.FileName != "" && relPath != "" {
+			bookPath := filepath.Join(r.libraryPath, relPath)
+			f.AbsolutePath = filepath.Join(bookPath, f.FileName+"."+strings.ToLower(f.Format))
+		}
+		out[bookID] = append(out[bookID], f)
+	}
+	return out, rows.Err()
+}
+
+func (r *Reader) loadAllIdentifiers(ctx context.Context) (map[int64]map[string]string, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT book, type, val
+		FROM identifiers
+		ORDER BY book, id`)
+	if err != nil {
+		return nil, fmt.Errorf("load all identifiers: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[int64]map[string]string)
+	for rows.Next() {
+		var (
+			bookID   int64
+			typ, val string
+		)
+		if err := rows.Scan(&bookID, &typ, &val); err != nil {
+			return nil, fmt.Errorf("scan identifier: %w", err)
+		}
+		typ = cleanIdentifierType(typ)
+		val = cleanIdentifierValue(val)
+		if typ != "" && val != "" {
+			if _, ok := out[bookID]; !ok {
+				out[bookID] = make(map[string]string)
+			}
+			if _, exists := out[bookID][typ]; !exists {
+				out[bookID][typ] = val
+			}
+		}
+	}
+	return out, rows.Err()
+}
+
+func (r *Reader) loadAllLanguages(ctx context.Context) (map[int64]string, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT bll.book, l.lang_code
+		FROM books_languages_link bll
+		JOIN languages l ON l.id = bll.lang_code
+		ORDER BY bll.book, bll.item_order`)
+	if err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			return make(map[int64]string), nil
+		}
+		return nil, fmt.Errorf("load all languages: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[int64]string)
+	for rows.Next() {
+		var (
+			bookID int64
+			lang   string
+		)
+		if err := rows.Scan(&bookID, &lang); err != nil {
+			return nil, fmt.Errorf("scan language: %w", err)
+		}
+		if _, exists := out[bookID]; !exists {
+			out[bookID] = lang
+		}
+	}
+	return out, rows.Err()
 }

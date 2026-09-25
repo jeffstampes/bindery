@@ -130,14 +130,15 @@ func LoadCalibreConfig(ctx context.Context, settings *db.SettingsRepo) calibre.C
 		enabled = true
 	}
 	return calibre.Config{
-		Enabled:              enabled,
-		LibraryPath:          get(SettingCalibreLibraryPath),
-		BinaryPath:           get(SettingCalibreBinaryPath),
-		LibraryImportEnabled: strings.EqualFold(get(SettingCalibreLibraryImportEnabled), "true"),
-		SyncOnStartup:        strings.EqualFold(get(SettingCalibreSyncOnStartup), "true"),
-		PluginURL:            get(SettingCalibrePluginURL),
-		PluginAPIKey:         get(SettingCalibrePluginAPIKey),
-		PushPathRemap:        get(SettingCalibrePushPathRemap),
+		Enabled:                     enabled,
+		LibraryPath:                 get(SettingCalibreLibraryPath),
+		BinaryPath:                  get(SettingCalibreBinaryPath),
+		LibraryImportEnabled:        strings.EqualFold(get(SettingCalibreLibraryImportEnabled), "true"),
+		AuthoritativeLibraryEnabled: strings.EqualFold(get(SettingCalibreAuthoritativeLibraryEnabled), "true"),
+		SyncOnStartup:               strings.EqualFold(get(SettingCalibreSyncOnStartup), "true"),
+		PluginURL:                   get(SettingCalibrePluginURL),
+		PluginAPIKey:                get(SettingCalibrePluginAPIKey),
+		PushPathRemap:               get(SettingCalibrePushPathRemap),
 	}
 }
 
