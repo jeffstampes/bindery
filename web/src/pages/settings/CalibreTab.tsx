@@ -545,10 +545,10 @@ function CalibreSection({
                 {t('settings.calibre.authoritative.label', 'Calibre is authoritative for owned books')}
               </label>
               <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">
-                {t('settings.calibre.authoritative.hint', "Treat Calibre/CWA as the authority for the metadata of books it already holds. Bindery reads metadata.db read-only and never writes to it, and keeps owning what it is good at: monitored authors, wanted books, external catalogue metadata and acquisition. Off by default; while it is off every Calibre behaviour above is unchanged.")}
+                {t('settings.calibre.authoritative.hint', "Record intent to treat Calibre/CWA as the authority for books it holds. Authoritative mode is designed to read metadata.db read-only and never write to it. Live reading, matching, and owned-state integration arrive in later slices; enabling this setting does not yet change catalogue or ownership behavior.")}
               </p>
               <p className="text-xs text-slate-600 dark:text-zinc-500 mt-1">
-                {t('settings.calibre.authoritative.staged', 'Calibre/CWA becomes the authority for owned-book metadata. Enabling this records your choice; owned-book matching and audit arrive later, so nothing changes immediately.')}
+                {t('settings.calibre.authoritative.staged', 'Records operator intent for Calibre/CWA to be the authority for owned-book metadata. Enabling this setting records your choice now; owned-book matching, live reading, and metadata audit arrive in later slices, so nothing changes in the catalogue yet.')}
               </p>
               {authoritativeSaveError && (
                 <p className="text-xs text-red-600 dark:text-red-400 mt-1">{authoritativeSaveError}</p>

@@ -221,6 +221,52 @@ func TestCalibreAuthoritativeLibrary_BlocksClearingTheLibraryPath(t *testing.T) 
 	}
 }
 
+// TestCalibreAuthoritativeLibrary_BlocksDeletingTheLibraryPath proves that
+// deleting calibre.library_path while calibre.authoritative_library_enabled=true
+// is rejected (400), leaving the existing library path stored, and that deleting
+// succeeds once authoritative mode is off.
+func TestCalibreAuthoritativeLibrary_BlocksDeletingTheLibraryPath(t *testing.T) {
+	h, repo, ctx := settingsFixture(t)
+	tmp := t.TempDir()
+	if err := repo.Set(ctx, SettingCalibreLibraryPath, tmp); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Set(ctx, SettingCalibreAuthoritativeLibraryEnabled, "true"); err != nil {
+		t.Fatal(err)
+	}
+
+	req := withKey(httptest.NewRequest(http.MethodDelete,
+		"/api/v1/setting/"+SettingCalibreLibraryPath, nil), SettingCalibreLibraryPath)
+	rec := httptest.NewRecorder()
+	h.Delete(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on DELETE while authoritative mode is on, got %d: %s", rec.Code, rec.Body.String())
+	}
+	stored, err := repo.Get(ctx, SettingCalibreLibraryPath)
+	if err != nil || stored == nil || stored.Value != tmp {
+		t.Fatalf("library path changed or cleared after rejected DELETE: stored=%+v, err=%v", stored, err)
+	}
+
+	// Turn mode off and confirm DELETE succeeds.
+	if err := repo.Set(ctx, SettingCalibreAuthoritativeLibraryEnabled, "false"); err != nil {
+		t.Fatal(err)
+	}
+	req = withKey(httptest.NewRequest(http.MethodDelete,
+		"/api/v1/setting/"+SettingCalibreLibraryPath, nil), SettingCalibreLibraryPath)
+	rec = httptest.NewRecorder()
+	h.Delete(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("deleting path with mode off: expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+	stored, err = repo.Get(ctx, SettingCalibreLibraryPath)
+	if err != nil {
+		t.Fatalf("get library path: %v", err)
+	}
+	if stored != nil && stored.Value != "" {
+		t.Errorf("library path still present after DELETE: stored=%+v", stored)
+	}
+}
+
 // TestCalibreAuthoritativeLibrary_Descriptor pins what the registry advertises,
 // since the default it carries is what a client renders before anything is
 // stored.

@@ -97,11 +97,11 @@ no environment variable, no migration.
   discoverable without a client hard-coding it.
 - Rendered on **Settings → Calibre**, under the read-side section, next to
   Library import. All of its user-facing text flows through `useTranslation`.
-- Only `true` is accepted; anything non-bool (including empty) reads as false.
+- Accepts `true`, `false`, and empty/unset (which reads as off); rejects invalid values such as `yes`.
 
 ### Dependency rule
 
-The mode reads `metadata.db` out of the configured Calibre library, so the two
+Authoritative mode is designed to read `metadata.db` out of the configured Calibre library, so the two
 keys are validated against each other:
 
 - enabling the mode with no `calibre.library_path` is refused;

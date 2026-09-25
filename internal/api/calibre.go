@@ -24,20 +24,19 @@ const (
 	// importing a Calibre library into Bindery. Off by default; when off, no
 	// startup / scheduled / manual library import runs.
 	SettingCalibreLibraryImportEnabled = "calibre.library_import_enabled"
-	// SettingCalibreAuthoritativeLibraryEnabled is the opt-in switch for
-	// authoritative-library mode: Calibre/CWA owns the metadata of the books
-	// it actually holds, and Bindery treats metadata.db as a live read-only
-	// owned-library source instead of importing those books into its own
-	// catalogue. Off by default, and every existing Calibre flow behaves
-	// exactly as it did while it is off.
+	// SettingCalibreAuthoritativeLibraryEnabled records operator intent for
+	// authoritative-library mode: Calibre/CWA owns the metadata of books it
+	// holds, and authoritative mode is designed to read metadata.db read-only
+	// instead of importing those books into Bindery's catalogue. Off by default;
+	// enabling the setting records configuration only and does not yet change
+	// catalogue or ownership behavior.
 	//
-	// Today the value is configuration only. The owned-library read path,
-	// work-to-book matching, owned-state reconciliation and the metadata
-	// audit are separate later slices; the design contract those slices must
-	// honour is docs/design/calibre-authoritative-library.md. The one rule
-	// the key carries now lives in validateSettingDependencies: the mode
-	// reads metadata.db out of calibre.library_path, so it cannot be turned
-	// on without one, and the path cannot be cleared while it is on.
+	// The live owned-library read path, work-to-book matching, owned-state
+	// reconciliation, and metadata audit arrive in later slices; the design
+	// contract those slices must honour is docs/design/calibre-authoritative-library.md.
+	// The dependency rule in validateSettingDependencies ensures authoritative
+	// mode cannot be enabled without calibre.library_path, and that path cannot
+	// be cleared while authoritative mode is enabled.
 	SettingCalibreAuthoritativeLibraryEnabled = "calibre.authoritative_library_enabled"
 	SettingCalibrePluginURL                   = "calibre.plugin_url"
 	SettingCalibrePluginAPIKey                = "calibre.plugin_api_key"
