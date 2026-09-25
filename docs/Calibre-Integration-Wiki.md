@@ -91,6 +91,16 @@ The write integration and the CWA mirror do not run in this mode; the drop folde
 
 Separate from all of the above, and it works alongside any topology: **Library import** on the Calibre tab reads `metadata.db` and creates authors, books and editions from it, with the file paths tracked directly so those books arrive with their files attached. It does not need the write integration to be on. See [Bringing in an existing library](User-Guide-Wiki.md#bringing-in-an-existing-library) in the user guide.
 
+### Authoritative-library mode (opt in, off by default)
+
+Library import copies Calibre's books into Bindery's catalogue, so an owned book ends up described in two places by two tools. If Calibre or CWA is already your curated source of truth, **Calibre is authoritative for owned books** (`calibre.authoritative_library_enabled`, on the Calibre tab) records operator intent for Calibre/CWA to own the metadata of books it holds. Authoritative mode is designed to read `metadata.db` read-only, while Bindery keeps owning monitoring, wanted books, external catalogue metadata and acquisition. Live owned-library reading, matching, and owned-state integration arrive in later slices; enabling the setting today records this configuration only and does not yet change catalogue or ownership behavior.
+
+- **It is off by default and changes nothing while off.** The write integration, the CWA mirror, library import and the drop folder all behave exactly as described above.
+- **It needs a Calibre library path.** Authoritative mode is designed to read `metadata.db` out of it, so turning the mode on without **Library path** set is refused, and clearing the path while the mode is on is refused. Turning the mode off is always allowed.
+- **Right now it only records the choice.** Owned-book matching, owned-state reconciliation and the metadata audit are later work; nothing in the catalogue changes when you enable it today.
+
+The authority boundary, the read-only rule, what Bindery may persist about a match, and the limits planned for the audit and any future write back are recorded in [`docs/design/calibre-authoritative-library.md`](design/calibre-authoritative-library.md).
+
 ## Troubleshooting
 
 **Grabbed and imported, but the book never appears in Calibre or CWA.**

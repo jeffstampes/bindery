@@ -325,6 +325,11 @@ var settingDescriptors = []SettingDescriptor{
 		State:       SettingStateActive,
 	},
 	{
+		Key: SettingCalibreAuthoritativeLibraryEnabled, Type: SettingTypeBool, Default: "false",
+		Description: "Record operator intent for Calibre/CWA to be authoritative for books it holds (designed to read metadata.db read-only; live reading and matching arrive in later slices and enabling this setting does not yet change catalogue behavior). Requires a Calibre library path.",
+		State:       SettingStateActive,
+	},
+	{
 		Key: "calibre.last_import_at", Type: SettingTypeString, Default: "",
 		Description: "RFC3339 timestamp of the last Calibre library import, written by the importer and shown on the Calibre settings tab.",
 		State:       SettingStateInternal,
