@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/vavallee/bindery/internal/models"
@@ -109,14 +110,14 @@ func TestNormalizationHelpers(t *testing.T) {
 		}
 	}
 
-	// 4. AuthorTokensMatch
-	if !AuthorTokensMatch("Brandon Sanderson", "Sanderson, Brandon") {
+	// 4. AuthorMatches
+	if !AuthorMatches("Brandon Sanderson", "Sanderson, Brandon") {
 		t.Error("expected Brandon Sanderson to match Sanderson, Brandon")
 	}
-	if !AuthorTokensMatch("Stephen King", "Stephen King & Peter Straub") {
-		t.Error("expected Stephen King to match co-authored name")
+	if AuthorMatches("Stephen King", "Stephen King & Peter Straub") {
+		t.Error("token containment alone must NOT create an author match")
 	}
-	if AuthorTokensMatch("Brandon Sanderson", "Stephen King") {
+	if AuthorMatches("Brandon Sanderson", "Stephen King") {
 		t.Error("expected Brandon Sanderson not to match Stephen King")
 	}
 }
@@ -155,6 +156,158 @@ func TestExtractWorkIdentifiers(t *testing.T) {
 	}
 	if len(ids["goodreads"]) == 0 || ids["goodreads"][0] != "7235538" {
 		t.Errorf("expected goodreads 7235538, got %v", ids["goodreads"])
+	}
+}
+
+func TestMinimalPersistedCrossReference(t *testing.T) {
+	// 1. Unmatched result returns nil from ToCrossReference
+	unmatchedRes := &MatchResult{
+		BookID:      1,
+		CalibreID:   0,
+		MatchMethod: "none",
+		Confidence:  "none",
+		Status:      "unmatched",
+	}
+	if ref := unmatchedRes.ToCrossReference(); ref != nil {
+		t.Fatalf("expected nil cross-reference for unmatched result, got %+v", ref)
+	}
+
+	// 2. Matched result contains no shadow metadata in MatchDetailsJSON
+	cb := CalibreBook{
+		CalibreID: 10,
+		Title:     "The Way of Kings",
+		Authors:   []CalibreAuthor{{Name: "Brandon Sanderson"}},
+	}
+	matchedRes := &MatchResult{
+		BookID:             1,
+		CalibreID:          10,
+		MatchMethod:        "identifier:isbn",
+		Confidence:         models.CalibreMatchConfidenceExact,
+		Status:             models.CalibreMatchStatusMatched,
+		CalibreFingerprint: CalculateFingerprint(&cb),
+		MatchedIdentifier:  "isbn:9780765326355",
+		MatchDetails: map[string]any{
+			"matched_identifier": "isbn:9780765326355",
+		},
+	}
+
+	ref := matchedRes.ToCrossReference()
+	if ref == nil {
+		t.Fatal("expected non-nil cross-reference for matched result")
+	}
+
+	// Verify no title/author strings exist in MatchDetailsJSON
+	jsonStr := ref.MatchDetailsJSON
+	if strings.Contains(jsonStr, "The Way of Kings") || strings.Contains(jsonStr, "Brandon Sanderson") || strings.Contains(jsonStr, "calibre_title") || strings.Contains(jsonStr, "bindery_title") {
+		t.Fatalf("cross-reference details must not store title or author shadow metadata, got %s", jsonStr)
+	}
+}
+
+func TestAuthorFallback_ConservativeMatching(t *testing.T) {
+	calibreBooks := []CalibreBook{
+		{
+			CalibreID: 100,
+			Title:     "The Talisman",
+			Authors:   []CalibreAuthor{{Name: "Stephen King"}, {Name: "Peter Straub"}},
+		},
+		{
+			CalibreID: 200,
+			Title:     "Black House",
+			Authors:   []CalibreAuthor{{Name: "Stephen King & Peter Straub"}},
+		},
+	}
+
+	idx := NewLibraryIndex(calibreBooks)
+
+	// 1. Discrete author match: Bindery author "Stephen King" matches Calibre book with discrete authors ["Stephen King", "Peter Straub"]
+	b1 := &models.Book{
+		ID:     1,
+		Title:  "The Talisman",
+		Author: &models.Author{Name: "Stephen King"},
+	}
+	res1 := idx.MatchWork(b1)
+	if res1.Status != models.CalibreMatchStatusMatched || res1.CalibreID != 100 {
+		t.Fatalf("expected match to Calibre ID 100, got status=%s, ID=%d", res1.Status, res1.CalibreID)
+	}
+
+	// 2. Negative case: Bindery author "Stephen King" does NOT match single combined author string "Stephen King & Peter Straub"
+	b2 := &models.Book{
+		ID:     2,
+		Title:  "Black House",
+		Author: &models.Author{Name: "Stephen King"},
+	}
+	res2 := idx.MatchWork(b2)
+	if res2.Status != "unmatched" {
+		t.Fatalf("expected unmatched for token containment on combined author string, got status=%s, ID=%d", res2.Status, res2.CalibreID)
+	}
+}
+
+func TestPrimaryTitle_IndexingSymmetry(t *testing.T) {
+	// Direction A: Calibre has no subtitle ("Dune"), Bindery has subtitle ("Dune: A Novel")
+	// Direction B: Calibre has subtitle ("Dune: A Novel"), Bindery has no subtitle ("Dune")
+	calibreBooks := []CalibreBook{
+		{
+			CalibreID: 10,
+			Title:     "Dune",
+			Authors:   []CalibreAuthor{{Name: "Frank Herbert"}},
+		},
+		{
+			CalibreID: 20,
+			Title:     "Foundation: First Novel",
+			Authors:   []CalibreAuthor{{Name: "Isaac Asimov"}},
+		},
+	}
+
+	idx := NewLibraryIndex(calibreBooks)
+
+	// Direction A test
+	bA := &models.Book{
+		ID:     1,
+		Title:  "Dune: A Novel",
+		Author: &models.Author{Name: "Frank Herbert"},
+	}
+	resA := idx.MatchWork(bA)
+	if resA.Status != models.CalibreMatchStatusMatched || resA.CalibreID != 10 {
+		t.Fatalf("Direction A failed: Bindery 'Dune: A Novel' should find Calibre 'Dune', got status=%s, ID=%d", resA.Status, resA.CalibreID)
+	}
+
+	// Direction B test
+	bB := &models.Book{
+		ID:     2,
+		Title:  "Foundation",
+		Author: &models.Author{Name: "Isaac Asimov"},
+	}
+	resB := idx.MatchWork(bB)
+	if resB.Status != models.CalibreMatchStatusMatched || resB.CalibreID != 20 {
+		t.Fatalf("Direction B failed: Bindery 'Foundation' should find Calibre 'Foundation: First Novel', got status=%s, ID=%d", resB.Status, resB.CalibreID)
+	}
+
+	// Primary Title Ambiguity test: Multiple Calibre books for same author share primary title
+	ambiguousCalibreBooks := []CalibreBook{
+		{
+			CalibreID: 101,
+			Title:     "Dune",
+			Authors:   []CalibreAuthor{{Name: "Frank Herbert"}},
+		},
+		{
+			CalibreID: 102,
+			Title:     "Dune: The Graphic Novel",
+			Authors:   []CalibreAuthor{{Name: "Frank Herbert"}},
+		},
+	}
+
+	ambIdx := NewLibraryIndex(ambiguousCalibreBooks)
+	bAmb := &models.Book{
+		ID:     3,
+		Title:  "Dune: Deluxe Edition",
+		Author: &models.Author{Name: "Frank Herbert"},
+	}
+	resAmb := ambIdx.MatchWork(bAmb)
+	if resAmb.Status != models.CalibreMatchStatusAmbiguous {
+		t.Fatalf("expected primary title ambiguity to yield ambiguous status, got status=%s", resAmb.Status)
+	}
+	if len(resAmb.CandidateIDs) != 2 || resAmb.CandidateIDs[0] != 101 || resAmb.CandidateIDs[1] != 102 {
+		t.Fatalf("expected candidate IDs [101, 102], got %v", resAmb.CandidateIDs)
 	}
 }
 
@@ -266,88 +419,56 @@ func TestMatcher_AmbiguousIdentifierMatching(t *testing.T) {
 	}
 }
 
-func TestMatcher_ConservativeFallbackMatching(t *testing.T) {
-	calibreBooks := []CalibreBook{
-		{
-			CalibreID: 100,
-			Title:     "Mistborn: The Final Empire",
-			Authors:   []CalibreAuthor{{Name: "Sanderson, Brandon"}},
-		},
-		{
-			CalibreID: 200,
-			Title:     "The Talisman",
-			Authors:   []CalibreAuthor{{Name: "Stephen King"}, {Name: "Peter Straub"}},
-		},
+func TestRevalidateCrossReference_Ambiguous(t *testing.T) {
+	root := buildFixtureLibrary(t)
+	auth, err := OpenAuthoritativeReader(root)
+	if err != nil {
+		t.Fatalf("OpenAuthoritativeReader: %v", err)
+	}
+	defer auth.Close()
+
+	ctx := context.Background()
+
+	// 1. Revalidating an ambiguous cross reference with book == nil does not crash or look up ID 0
+	ambRef := &models.CalibreWorkCrossReference{
+		BookID:           1,
+		CalibreID:        0,
+		MatchMethod:      "fallback_title_author",
+		Confidence:       models.CalibreMatchConfidenceAmbiguous,
+		Status:           models.CalibreMatchStatusAmbiguous,
+		MatchDetailsJSON: `{"candidates":[1,2]}`,
 	}
 
-	idx := NewLibraryIndex(calibreBooks)
+	updated, changed, err := RevalidateCrossReference(ctx, ambRef, nil, auth)
+	if err != nil {
+		t.Fatalf("RevalidateCrossReference ambiguous nil book: %v", err)
+	}
+	if changed {
+		t.Fatal("expected no change when book is nil")
+	}
+	if updated.Status != models.CalibreMatchStatusAmbiguous {
+		t.Fatalf("expected status to remain ambiguous, got %s", updated.Status)
+	}
 
-	// 1. Title with punctuation + Last, First author match
-	b1 := &models.Book{
+	// 2. Revalidating an ambiguous cross reference when matcher now resolves uniquely
+	book := &models.Book{
 		ID:     1,
-		Title:  "Mistborn -- The Final Empire!",
-		Author: &models.Author{Name: "Brandon Sanderson"},
-	}
-	res1 := idx.MatchWork(b1)
-	if res1.Status != models.CalibreMatchStatusMatched || res1.CalibreID != 100 {
-		t.Fatalf("fallback match 1 failed: status=%s, calibreID=%d", res1.Status, res1.CalibreID)
-	}
-	if res1.MatchMethod != "fallback_title_author" {
-		t.Errorf("expected fallback_title_author method, got %s", res1.MatchMethod)
-	}
-
-	// 2. Co-authored title match
-	b2 := &models.Book{
-		ID:     2,
-		Title:  "The Talisman",
-		Author: &models.Author{Name: "Stephen King"},
-	}
-	res2 := idx.MatchWork(b2)
-	if res2.Status != models.CalibreMatchStatusMatched || res2.CalibreID != 200 {
-		t.Fatalf("fallback match 2 failed: status=%s, calibreID=%d", res2.Status, res2.CalibreID)
-	}
-
-	// 3. Unmatched book (wrong author)
-	b3 := &models.Book{
-		ID:     3,
-		Title:  "The Talisman",
-		Author: &models.Author{Name: "George R. R. Martin"},
-	}
-	res3 := idx.MatchWork(b3)
-	if res3.Status != "unmatched" {
-		t.Fatalf("expected unmatched for wrong author, got %s", res3.Status)
-	}
-}
-
-func TestMatcher_AmbiguousFallbackMatching(t *testing.T) {
-	// Two Calibre entries for the same title and author (e.g. EPUB vs MOBI entries)
-	calibreBooks := []CalibreBook{
-		{
-			CalibreID: 101,
-			Title:     "Dune",
-			Authors:   []CalibreAuthor{{Name: "Frank Herbert"}},
-		},
-		{
-			CalibreID: 102,
-			Title:     "Dune (Special Edition)",
-			Authors:   []CalibreAuthor{{Name: "Frank Herbert"}},
+		Title:  "Book One",
+		Author: &models.Author{Name: "Alice Author"},
+		Editions: []models.Edition{
+			{ISBN13: pointerTo("9781234567890")},
 		},
 	}
 
-	idx := NewLibraryIndex(calibreBooks)
-
-	b := &models.Book{
-		ID:     1,
-		Title:  "Dune",
-		Author: &models.Author{Name: "Frank Herbert"},
+	updatedMatch, changedMatch, err := RevalidateCrossReference(ctx, ambRef, book, auth)
+	if err != nil {
+		t.Fatalf("RevalidateCrossReference ambiguous re-match: %v", err)
 	}
-
-	res := idx.MatchWork(b)
-	if res.Status != models.CalibreMatchStatusAmbiguous {
-		t.Fatalf("expected ambiguous fallback status, got %s", res.Status)
+	if !changedMatch {
+		t.Fatal("expected changed=true when ambiguous becomes uniquely matched")
 	}
-	if len(res.CandidateIDs) != 2 || res.CandidateIDs[0] != 101 || res.CandidateIDs[1] != 102 {
-		t.Fatalf("expected candidates [101, 102], got %v", res.CandidateIDs)
+	if updatedMatch.Status != models.CalibreMatchStatusMatched || updatedMatch.CalibreID != 1 {
+		t.Fatalf("expected matched status with CalibreID=1, got status=%s ID=%d", updatedMatch.Status, updatedMatch.CalibreID)
 	}
 }
 
@@ -463,6 +584,10 @@ func TestLargeLibraryIndex_Performance(t *testing.T) {
 			t.Fatalf("iter %d: expected match to calibre ID 42001, got %d (status %s)", i, res.CalibreID, res.Status)
 		}
 	}
+}
+
+func pointerTo(s string) *string {
+	return &s
 }
 
 func fileExistsRel(p string) bool {
