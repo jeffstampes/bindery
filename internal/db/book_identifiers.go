@@ -133,6 +133,30 @@ func (r *BookRepo) ListBookIdentifiersByAuthor(ctx context.Context, authorID int
 	return out, nil
 }
 
+// ListAllBookIdentifiers returns every provider id attached to any book,
+// grouped by book_id. Used for bulk hydration during reconciliation (#5).
+func (r *BookRepo) ListAllBookIdentifiers(ctx context.Context) (map[int64][]models.BookIdentifier, error) {
+	rows, err := r.exec.QueryContext(ctx, `
+		SELECT book_id, provider, foreign_id, created_at, updated_at
+		FROM book_identifiers
+		ORDER BY book_id, provider, foreign_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list all book identifiers: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[int64][]models.BookIdentifier)
+	for rows.Next() {
+		var identifier models.BookIdentifier
+		if err := rows.Scan(&identifier.BookID, &identifier.Provider, &identifier.ForeignID,
+			&identifier.CreatedAt, &identifier.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan book identifier: %w", err)
+		}
+		out[identifier.BookID] = append(out[identifier.BookID], identifier)
+	}
+	return out, rows.Err()
+}
+
 // UpsertBookIdentifier attaches foreignID to bookID.
 //
 // Returns a *BookIdentifierConflictError when the id already belongs to a

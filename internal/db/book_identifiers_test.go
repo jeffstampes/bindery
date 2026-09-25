@@ -241,6 +241,45 @@ func TestBookIdentifiers_ListByAuthorGroupsIdentifiersInOneQuery(t *testing.T) {
 	}
 }
 
+func TestBookIdentifiers_ListAllBookIdentifiers(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory: %v", err)
+	}
+	books := NewBookRepo(database)
+	authors := NewAuthorRepo(database)
+
+	ctx := context.Background()
+	author := &models.Author{Name: "Bulk Author"}
+	if err := authors.Create(ctx, author); err != nil {
+		t.Fatalf("create author: %v", err)
+	}
+
+	b1 := &models.Book{AuthorID: author.ID, Title: "Book 1", ForeignID: "fid1"}
+	b2 := &models.Book{AuthorID: author.ID, Title: "Book 2", ForeignID: "fid2"}
+	if err := books.Create(ctx, b1); err != nil || books.Create(ctx, b2) != nil {
+		t.Fatalf("create books failed")
+	}
+
+	if err := books.UpsertBookIdentifier(ctx, b1.ID, "9781111111111"); err != nil {
+		t.Fatalf("upsert b1 id: %v", err)
+	}
+	if err := books.UpsertBookIdentifier(ctx, b2.ID, "9782222222222"); err != nil {
+		t.Fatalf("upsert b2 id: %v", err)
+	}
+
+	all, err := books.ListAllBookIdentifiers(ctx)
+	if err != nil {
+		t.Fatalf("ListAllBookIdentifiers: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("ListAllBookIdentifiers returned %d books, want 2", len(all))
+	}
+	if len(all[b1.ID]) < 1 || len(all[b2.ID]) < 1 {
+		t.Errorf("missing bulk identifiers for books: %+v", all)
+	}
+}
+
 // TestBookIdentifiers_DeletingABookClearsItsIdentifiers: the FK cascade is what
 // stops a dead id permanently blocking the same book being re-added, which is
 // the failure migration 068 had to repair for authors.

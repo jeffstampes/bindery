@@ -362,3 +362,41 @@ func TestEditionRepo_ListByBook(t *testing.T) {
 		t.Errorf("unrelated book should have 0 editions, got %d", len(other))
 	}
 }
+
+func TestEditions_ListAllEditions(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory: %v", err)
+	}
+	bookRepo := NewBookRepo(database)
+	authorRepo := NewAuthorRepo(database)
+	repo := NewEditionRepo(database)
+
+	ctx := context.Background()
+	a := &models.Author{ForeignID: "OL-AE-A", Name: "Author"}
+	if err := authorRepo.Create(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	b1 := &models.Book{ForeignID: "OL-LB-1", AuthorID: a.ID, Title: "B1", Status: "wanted", Monitored: true}
+	b2 := &models.Book{ForeignID: "OL-LB-2", AuthorID: a.ID, Title: "B2", Status: "wanted", Monitored: true}
+	if err := bookRepo.Create(ctx, b1); err != nil || bookRepo.Create(ctx, b2) != nil {
+		t.Fatal("create books")
+	}
+
+	e1 := &models.Edition{ForeignID: "E1", BookID: b1.ID, Title: "E1"}
+	e2 := &models.Edition{ForeignID: "E2", BookID: b2.ID, Title: "E2"}
+	if err := repo.Upsert(ctx, e1); err != nil || repo.Upsert(ctx, e2) != nil {
+		t.Fatal("upsert editions")
+	}
+
+	all, err := repo.ListAllEditions(ctx)
+	if err != nil {
+		t.Fatalf("ListAllEditions: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("ListAllEditions returned %d book groups, want 2", len(all))
+	}
+	if len(all[b1.ID]) != 1 || len(all[b2.ID]) != 1 {
+		t.Errorf("missing bulk editions: %+v", all)
+	}
+}

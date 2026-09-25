@@ -96,6 +96,30 @@ func (r *EditionRepo) ListByBook(ctx context.Context, bookID int64) ([]models.Ed
 	return out, rows.Err()
 }
 
+// ListAllEditions returns every edition in the database, grouped by book_id.
+// Used for bulk hydration during reconciliation (#5).
+func (r *EditionRepo) ListAllEditions(ctx context.Context) (map[int64][]models.Edition, error) {
+	rows, err := r.exec.QueryContext(ctx, `
+		SELECT id, foreign_id, book_id, title, isbn_13, isbn_10, asin, publisher,
+		       publish_date, format, num_pages, language, image_url, is_ebook,
+		       edition_info, monitored, created_at, updated_at
+		FROM editions ORDER BY book_id, id`)
+	if err != nil {
+		return nil, fmt.Errorf("list all editions: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[int64][]models.Edition)
+	for rows.Next() {
+		e, err := scanEditionFrom(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan edition: %w", err)
+		}
+		out[e.BookID] = append(out[e.BookID], e)
+	}
+	return out, rows.Err()
+}
+
 // Upsert inserts the edition if its foreign_id is new, or updates the
 // format / title / isbn / publish_date fields in place if the row already
 // exists. Returns the persisted edition id.

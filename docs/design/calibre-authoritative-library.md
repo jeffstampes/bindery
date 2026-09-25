@@ -115,7 +115,7 @@ an instance can never be locked into it.
 | Setting | Interaction |
 |---|---|
 | `calibre.library_path` | Shared. Authoritative-library mode reads `metadata.db` from it, read-only. Required by the dependency rule above |
-| `calibre.library_import_enabled` | Independent today. Library import copies Calibre books into Bindery's catalogue, which is the duplicate-authority shape this mode avoids; running both is coherent only while the mode is configuration-only, and the owned-state slice must decide explicitly what it means |
+| `calibre.library_import_enabled` | Mutually exclusive in execution. When `calibre.authoritative_library_enabled = true`, scheduled and manual Calibre sync operations execute authoritative reconciliation (`Reconcile`) against `metadata.db` read-only and update cross-references, bypassing legacy catalogue import so shadow Book rows are never imported. When authoritative mode is disabled (`false`), legacy library import executes as before |
 | `calibre.mode` (write integration) | Unaffected. Registering a *newly acquired* book with Calibre is Bindery handing over a book Calibre does not yet have, which does not cross the authority boundary |
 | `cwa.ingest_path` | Unaffected, for the same reason |
 | `import.mode = external` | Unaffected. Complementary, if anything: the external tool owning the library is the topology this mode is designed around |

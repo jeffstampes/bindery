@@ -247,6 +247,10 @@ type BookListFilter struct {
 	// bound is set.
 	ReleaseFrom   string
 	ReleaseBefore string
+	// ExcludeAuthoritativeOwned, when true (and Status=="wanted"), excludes works
+	// whose monitored formats are all satisfied by authoritative Calibre ownership or
+	// local disk files (#5).
+	ExcludeAuthoritativeOwned bool
 }
 
 // bookSearchRank returns the ORDER BY prefix that ranks a search result set,
@@ -351,6 +355,19 @@ func (r *BookRepo) ListPageFiltered(ctx context.Context, f BookListFilter, limit
 		args = append(args, f.Status)
 		if f.Status == models.BookStatusWanted {
 			where += " AND books.monitored = 1"
+			if f.ExcludeAuthoritativeOwned {
+				where += ` AND NOT (
+					((books.media_type = 'ebook' OR books.media_type IS NULL OR books.media_type = '')
+					 AND (books.ebook_file_path != '' OR books.file_path != '' OR EXISTS (SELECT 1 FROM calibre_work_cross_references ref WHERE ref.book_id = books.id AND ref.status = 'matched')))
+					OR
+					(books.media_type = 'audiobook'
+					 AND (books.audiobook_file_path != '' OR books.file_path != ''))
+					OR
+					(books.media_type = 'both'
+					 AND (books.ebook_file_path != '' OR EXISTS (SELECT 1 FROM calibre_work_cross_references ref WHERE ref.book_id = books.id AND ref.status = 'matched'))
+					 AND books.audiobook_file_path != '')
+				)`
+			}
 		}
 	}
 	switch f.MediaType {

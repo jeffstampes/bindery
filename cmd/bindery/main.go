@@ -172,6 +172,7 @@ func main() {
 	calibreImportRunRepo := db.NewCalibreImportRunRepo(database)
 	calibreSnapshotRepo := db.NewCalibreEntitySnapshotRepo(database)
 	calibreProvenanceRepo := db.NewCalibreProvenanceRepo(database)
+	calibreCrossRefRepo := db.NewCalibreCrossReferenceRepo(database)
 	indexerRepo := db.NewIndexerRepo(database)
 	dlClientRepo := db.NewDownloadClientRepo(database)
 	downloadRepo := db.NewDownloadRepo(database)
@@ -538,6 +539,20 @@ func main() {
 		}
 	}
 
+	authoritativeService := calibre.NewAuthoritativeService(settingsRepo, calibreCrossRefRepo, bookRepo).WithEditions(editionRepo)
+	calibreImporter.WithAuthoritativeService(authoritativeService)
+
+	if authoritativeService.IsEnabled(ctxBoot) {
+		bgJobs.Go("calibre-authoritative-startup-reconcile", func(ctx context.Context) {
+			slog.Info("calibre authoritative library initial reconciliation")
+			if res, err := authoritativeService.Reconcile(ctx); err != nil {
+				slog.Warn("authoritative library initial reconciliation failed", "error", err)
+			} else if res != nil {
+				slog.Info("authoritative library initial reconciliation finished", "result", res)
+			}
+		})
+	}
+
 	// Scheduler
 	sched := scheduler.New(appCtx, importScanner, idxSearcher, metaAgg,
 		authorRepo, bookRepo, indexerRepo, downloadRepo, dlClientRepo, settingsRepo, blocklistRepo)
@@ -554,6 +569,7 @@ func main() {
 	// Register the Calibre importer as the 24-hour sync job. The scheduler
 	// only fires the job when the syncer is non-nil, so no guard needed here.
 	sched.WithCalibreSyncer(calibreImporter)
+	sched.WithAuthoritativeService(authoritativeService)
 
 	// Recommendation engine (24-hour job, gated on recommendations.enabled).
 	recRepo := db.NewRecommendationRepo(database)
@@ -652,6 +668,7 @@ func main() {
 		WithSeries(seriesRepo).
 		WithEditionHydration(editionRepo).
 		WithRoots(libraryRoots).
+		WithAuthoritativeService(authoritativeService).
 		WithLifetimeCtx(appCtx)
 	indexerHandler := api.NewIndexerHandler(indexerRepo, bookRepo, authorRepo, metadataProfileRepo, idxSearcher, settingsRepo, blocklistRepo).
 		WithAliases(authorAliasRepo).

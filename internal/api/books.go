@@ -23,18 +23,25 @@ import (
 	"github.com/vavallee/bindery/internal/textutil"
 )
 
+type authoritativeService interface {
+	IsEnabled(ctx context.Context) bool
+	IsOwned(ctx context.Context, book *models.Book) bool
+	FilterWantedBooks(ctx context.Context, books []models.Book) []models.Book
+}
+
 type BookHandler struct {
-	books     *db.BookRepo
-	meta      *metadata.Aggregator
-	lookup    BookMetaLookup // used by Rebind; defaults to meta when non-nil
-	history   *db.HistoryRepo
-	searcher  BookSearcher
-	settings  *db.SettingsRepo
-	downloads *db.DownloadRepo
-	authors   *db.AuthorRepo
-	series    *db.SeriesRepo
-	editions  *db.EditionRepo
-	roots     *LibraryRoots // optional: library-root containment for delete
+	books         *db.BookRepo
+	meta          *metadata.Aggregator
+	lookup        BookMetaLookup // used by Rebind; defaults to meta when non-nil
+	history       *db.HistoryRepo
+	searcher      BookSearcher
+	settings      *db.SettingsRepo
+	downloads     *db.DownloadRepo
+	authors       *db.AuthorRepo
+	series        *db.SeriesRepo
+	editions      *db.EditionRepo
+	roots         *LibraryRoots // optional: library-root containment for delete
+	authoritative authoritativeService
 
 	editionFetcher bookhydrate.EditionFetcher
 
@@ -118,6 +125,12 @@ func (h *BookHandler) WithEditionHydration(editions *db.EditionRepo) *BookHandle
 // A nil value disables the check (the default; preserves legacy test wiring).
 func (h *BookHandler) WithRoots(r *LibraryRoots) *BookHandler {
 	h.roots = r
+	return h
+}
+
+// WithAuthoritativeService wires the AuthoritativeService for Calibre/CWA mode.
+func (h *BookHandler) WithAuthoritativeService(a authoritativeService) *BookHandler {
+	h.authoritative = a
 	return h
 }
 
@@ -293,14 +306,15 @@ func (h *BookHandler) List(w http.ResponseWriter, r *http.Request) {
 			// see the shared library (0 = unscoped) while non-admins stay isolated
 			// to their own + unowned books, consistent with the authors list and
 			// CheckOwnership's per-item bypass.
-			UserID:        auth.ListScopeUserID(r.Context()),
-			Search:        strings.TrimSpace(r.URL.Query().Get("search")),
-			Status:        status,
-			MediaType:     r.URL.Query().Get("mediaType"),
-			Monitored:     parseMonitoredParam(r.URL.Query().Get("monitored")),
-			Sort:          r.URL.Query().Get("sort"),
-			ReleaseFrom:   strings.TrimSpace(r.URL.Query().Get("releaseFrom")),
-			ReleaseBefore: strings.TrimSpace(r.URL.Query().Get("releaseBefore")),
+			UserID:                    auth.ListScopeUserID(r.Context()),
+			Search:                    strings.TrimSpace(r.URL.Query().Get("search")),
+			Status:                    status,
+			MediaType:                 r.URL.Query().Get("mediaType"),
+			Monitored:                 parseMonitoredParam(r.URL.Query().Get("monitored")),
+			Sort:                      r.URL.Query().Get("sort"),
+			ReleaseFrom:               strings.TrimSpace(r.URL.Query().Get("releaseFrom")),
+			ReleaseBefore:             strings.TrimSpace(r.URL.Query().Get("releaseBefore")),
+			ExcludeAuthoritativeOwned: h.authoritative != nil && h.authoritative.IsEnabled(r.Context()),
 		}, limit, offset)
 	}
 
@@ -546,17 +560,19 @@ func (h *BookHandler) Update(w http.ResponseWriter, r *http.Request) {
 	// monitored (ListPageFiltered adds `AND books.monitored = 1` for the
 	// wanted status), so this closes the gap rather than opening a new one.
 	if h.searcher != nil && book.Monitored && book.Status == models.BookStatusWanted && oldStatus != models.BookStatusWanted {
-		b := *book
-		bgCtx := h.bgCtx()
-		// Respect the global auto-grab kill-switch.
-		autoGrabEnabled := true
-		if h.settings != nil {
-			if s, _ := h.settings.Get(bgCtx, "autoGrab.enabled"); s != nil && s.Value == "false" {
-				autoGrabEnabled = false
+		if h.authoritative == nil || !h.authoritative.IsOwned(r.Context(), book) {
+			b := *book
+			bgCtx := h.bgCtx()
+			// Respect the global auto-grab kill-switch.
+			autoGrabEnabled := true
+			if h.settings != nil {
+				if s, _ := h.settings.Get(bgCtx, "autoGrab.enabled"); s != nil && s.Value == "false" {
+					autoGrabEnabled = false
+				}
 			}
-		}
-		if autoGrabEnabled {
-			go h.searcher.SearchAndGrabBook(indexer.WithSearchOrigin(bgCtx, indexer.OriginBook), b)
+			if autoGrabEnabled {
+				go h.searcher.SearchAndGrabBook(indexer.WithSearchOrigin(bgCtx, indexer.OriginBook), b)
+			}
 		}
 	}
 
@@ -1018,6 +1034,9 @@ func (h *BookHandler) ListWanted(w http.ResponseWriter, r *http.Request) {
 	}
 	if books == nil {
 		books = []models.Book{}
+	}
+	if h.authoritative != nil {
+		books = h.authoritative.FilterWantedBooks(r.Context(), books)
 	}
 	for i := range books {
 		cleanBookDescription(&books[i])

@@ -60,6 +60,20 @@ func TestCalibreImport_Start_RejectsWhenImportDisabled(t *testing.T) {
 	}
 }
 
+func TestCalibreImport_Start_AcceptedWhenAuthoritativeModeEnabled(t *testing.T) {
+	s := &stubImporter{progress: calibre.ImportProgress{Running: true, Message: "reconciling"}}
+	h := NewCalibreImportHandler(s, loader(calibre.Config{Enabled: true, LibraryImportEnabled: false, AuthoritativeLibraryEnabled: true, LibraryPath: "/lib"}))
+
+	rec := httptest.NewRecorder()
+	h.Start(rec, httptest.NewRequest(http.MethodPost, "/api/v1/calibre/import", nil))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("code = %d, want 202 when AuthoritativeLibraryEnabled is true", rec.Code)
+	}
+	if s.lastCalls != 1 || s.lastPath != "/lib" {
+		t.Errorf("Start not invoked correctly: calls=%d path=%q", s.lastCalls, s.lastPath)
+	}
+}
+
 func TestCalibreImport_Start_RejectsMissingLibraryPath(t *testing.T) {
 	s := &stubImporter{}
 	h := NewCalibreImportHandler(s, loader(calibre.Config{Enabled: true, LibraryImportEnabled: true, LibraryPath: ""}))
