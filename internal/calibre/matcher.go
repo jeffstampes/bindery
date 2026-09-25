@@ -636,7 +636,7 @@ func RevalidateCrossReference(ctx context.Context, ref *models.CalibreWorkCrossR
 			updated.Status = models.CalibreMatchStatusMatched
 			updated.CalibreFingerprint = newRef.CalibreFingerprint
 			updated.MatchDetailsJSON = newRef.MatchDetailsJSON
-			return &updated, true, nil
+			return &updated, false, nil
 
 		case models.CalibreMatchStatusAmbiguous:
 			newRef := matchRes.ToCrossReference()

@@ -439,12 +439,12 @@ func TestRevalidateCrossReference_Ambiguous(t *testing.T) {
 		MatchDetailsJSON: `{"candidates":[1,2]}`,
 	}
 
-	updated, changed, err := RevalidateCrossReference(ctx, ambRef, nil, auth)
+	updated, stale, err := RevalidateCrossReference(ctx, ambRef, nil, auth)
 	if err != nil {
 		t.Fatalf("RevalidateCrossReference ambiguous nil book: %v", err)
 	}
-	if changed {
-		t.Fatal("expected no change when book is nil")
+	if stale {
+		t.Fatal("expected stale=false when book is nil")
 	}
 	if updated.Status != models.CalibreMatchStatusAmbiguous {
 		t.Fatalf("expected status to remain ambiguous, got %s", updated.Status)
@@ -460,12 +460,12 @@ func TestRevalidateCrossReference_Ambiguous(t *testing.T) {
 		},
 	}
 
-	updatedMatch, changedMatch, err := RevalidateCrossReference(ctx, ambRef, book, auth)
+	updatedMatch, staleMatch, err := RevalidateCrossReference(ctx, ambRef, book, auth)
 	if err != nil {
 		t.Fatalf("RevalidateCrossReference ambiguous re-match: %v", err)
 	}
-	if !changedMatch {
-		t.Fatal("expected changed=true when ambiguous becomes uniquely matched")
+	if staleMatch {
+		t.Fatal("expected stale=false when ambiguous becomes uniquely matched")
 	}
 	if updatedMatch.Status != models.CalibreMatchStatusMatched || updatedMatch.CalibreID != 1 {
 		t.Fatalf("expected matched status with CalibreID=1, got status=%s ID=%d", updatedMatch.Status, updatedMatch.CalibreID)
