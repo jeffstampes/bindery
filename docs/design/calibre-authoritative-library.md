@@ -128,7 +128,7 @@ rather than re-derived.
 | Slice | Status | Scope | Key invariants |
 |---|---|---|---|
 | Live read-only owned library | Implemented (#3) | Read `metadata.db` as a live owned-book source | 3, 9 |
-| Work ↔ Calibre matching | Planned (#4) | Identifier-first matching, conservative author/title fallback, with provenance and confidence | 4, 5, 9 |
+| Work ↔ Calibre matching | Implemented (#4) | Identifier-first matching, conservative author/title fallback, with provenance and confidence | 4, 5, 9 |
 | Owned-state integration | Planned (#5) | A confident match marks a Bindery work owned/satisfied, without importing its metadata | 4, 5 |
 | Metadata audit | Planned (#6) | Compare Calibre's metadata for owned books against provider metadata and report | 6, 7, 9 |
 | Audit/review UI | Planned (#7) | Surface discrepancies for human decision | 7 |
