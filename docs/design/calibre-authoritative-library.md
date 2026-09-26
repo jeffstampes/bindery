@@ -1,8 +1,7 @@
 # Calibre/CWA authoritative-library mode — design contract
 
-Status: **accepted, implemented through the audit review UI (#7).**
-Any Calibre write-back (#8) remains planned. The
-configuration and implemented slices below are part of this branch.
+Status: **accepted, implemented through optional mismatch-tag write-back (#8).**
+The configuration and implemented slices below are part of this branch.
 
 Tracking: [#1](https://github.com/jeffstampes/bindery/issues/1) ·
 upstream [vavallee/bindery#2782](https://github.com/vavallee/bindery/issues/2782)
@@ -57,9 +56,10 @@ is out of scope for authoritative-library mode.
    their current semantics. Turning the mode on must not silently disable any of
    them either; where they genuinely conflict, say so in the UI rather than
    reaching in.
-3. **`metadata.db` is read-only.** The core feature opens Calibre's database for
-   reading and never writes to it. This is not a convention to be relaxed when
-   something would be easier with a write.
+3. **`metadata.db` is read-only for the core feature.** The authoritative
+   reader opens Calibre's database for reading only. The separately opted-in
+   #8 mismatch-tag writer is the sole sanctioned exception; it has no access
+   to the reader's handle and cannot change curated metadata fields.
 4. **Presence in Calibre is not an import.** A Calibre book does not become a
    Bindery catalogue book merely because it exists in the owned library. That is
    precisely what the existing library import does, and it is what this mode
@@ -74,29 +74,35 @@ is out of scope for authoritative-library mode.
 7. **Discrepancies are advisory and human-reviewed.** An audit may report that
    Calibre's series index disagrees with a provider's. It may not act on that
    disagreement.
-8. **Writes back to Calibre are a separate, narrow capability.** If one ever
-   ships it is its own opt-in, initially limited to a single Bindery-owned
-   mismatch tag, and it never edits an operator's curated fields.
+8. **Writes back to Calibre are a separate, narrow capability.** Management
+   of the single Bindery-owned `BinderyMismatch` tag is independently opt-in and
+   is the **sole sanctioned Calibre metadata write-back exception**. It never
+   edits an operator's curated fields or replaces unrelated tags.
 9. **Large libraries are the normal case.** The motivating library is ~80,000
    books. Any design that is only tractable at a few thousand does not satisfy
    this contract.
 
 ## Configuration
 
-One key, through Bindery's existing settings machinery — no dedicated handler,
-no environment variable, no migration.
+Two independent opt-ins, through Bindery's existing settings machinery — no
+new handler, environment variable, or migration.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `calibre.authoritative_library_enabled` | bool | `false` | Calibre/CWA is authoritative for the metadata of books it already holds |
+| `calibre.audit_tag_write_enabled` | bool | `false` | Manage only the `BinderyMismatch` tag for actionable audit findings; requires authoritative mode |
 
 - Read and written through `GET`/`PUT /api/v1/setting/{key}` like every other
   setting, and described in the settings registry
   (`GET /api/v1/settings/descriptors`), so it is typed, defaulted and
   discoverable without a client hard-coding it.
-- Rendered on **Settings → Calibre**, under the read-side section, next to
-  Library import. All of its user-facing text flows through `useTranslation`.
-- Accepts `true`, `false`, and empty/unset (which reads as off); rejects invalid values such as `yes`.
+- The authoritative opt-in is rendered on **Settings → Calibre** under the
+  read-side section next to Library import. The separate audit-tag opt-in is
+  available through the typed settings API (no new UI control).
+- Both accept `true`, `false`, and empty/unset (off); invalid values such as
+  `yes` are rejected. Enabling tag writes requires authoritative mode already
+  enabled. Turning authoritative mode off always stops tag writes even if the
+  tag-write setting remains stored; turning tag writes off never removes tags.
 
 ### Dependency rule
 
@@ -114,7 +120,7 @@ an instance can never be locked into it.
 | Setting | Interaction |
 |---|---|
 | `calibre.library_path` | Shared. Authoritative-library mode reads `metadata.db` from it, read-only. Required by the dependency rule above |
-| `calibre.library_import_enabled` | Mutually exclusive in execution. When `calibre.authoritative_library_enabled = true`, scheduled and manual Calibre sync operations execute authoritative reconciliation (`Reconcile`) against `metadata.db` read-only and update cross-references, bypassing legacy catalogue import so shadow Book rows are never imported. When authoritative mode is disabled (`false`), legacy library import executes as before |
+| `calibre.library_import_enabled` | Mutually exclusive in execution. When `calibre.authoritative_library_enabled = true`, scheduled and manual Calibre sync operations execute authoritative reconciliation (`Reconcile`) using a read-only `metadata.db` snapshot and update cross-references, bypassing legacy catalogue import so shadow Book rows are never imported. The independent audit-tag opt-in may then manage only its tag after the audit commits. When authoritative mode is disabled (`false`), legacy library import executes as before |
 | `calibre.mode` (write integration) | Unaffected. Registering a *newly acquired* book with Calibre is Bindery handing over a book Calibre does not yet have, which does not cross the authority boundary |
 | `cwa.ingest_path` | Unaffected, for the same reason |
 | `import.mode = external` | Unaffected. Complementary, if anything: the external tool owning the library is the topology this mode is designed around |
@@ -130,11 +136,12 @@ Each slice is checked against the authority invariants above.
 | Owned-state integration | Implemented (#5) | A confident match marks a Bindery work owned/satisfied, without importing its metadata | 4, 5 |
 | Metadata audit | Implemented (#6) | Compare Calibre's metadata for owned books against stored external evidence and persist advisory findings | 6, 7, 9 |
 | Audit/review UI | Implemented (#7) | Admin review queue with bounded, filtered findings and ignore/recheck actions | 7 |
-| `BinderyMismatch` write-back | Planned (#8) | Optional, separately opt-in, one Bindery-owned tag | 3, 8 |
+| `BinderyMismatch` write-back | Implemented (#8) | Optional, separately opt-in, one fixed Bindery-owned tag | 3, 8 |
 
 Reconciliation satisfies ebook ownership for confident matches and runs the
-backend metadata audit. It creates no Calibre-backed catalogue book. The review
-UI never edits Calibre; write-back (#8) remains out of scope.
+backend metadata audit. It creates no Calibre-backed catalogue book. The
+review UI never edits curated metadata; optional #8 tag management is the
+sole sanctioned write-back exception.
 
 ### Backend metadata audit (#6)
 
@@ -219,7 +226,7 @@ Admin-only API routes under `/api/v1/calibre/audit`:
 - `POST /{id}/ignore` takes `{comparisonFingerprint}` and returns 204 only for
   the displayed, still-unresolved comparison; a stale decision returns 409.
   The existing #6 fingerprint lifecycle continues to govern later rechecks.
-- `POST /recheck` accepts an existing full, read-only `Audit` snapshot as a
+- `POST /recheck` accepts a full audit of a read-only snapshot as a
   shutdown-tracked background task (`202 {running,startedAt}`); duplicate manual
   starts return `409` with the running snapshot. `GET /recheck/status` returns
   the current or most recent manual run (`running`, timestamps, and either
@@ -227,13 +234,61 @@ Admin-only API routes under `/api/v1/calibre/audit`:
   leaving the page or disconnecting does not stop an accepted audit. The state
   lives in process memory (a restart clears it), and shutdown cancels/drains
   the tracked job before DB close. The shared service lock still serializes
-  manual and scheduled audit/reconciliation passes; no Calibre writes occur.
+  manual and scheduled passes; optional tag projection runs only after audit
+  persistence, never while a Bindery DB transaction is open.
 
 An optional `cwa.web_url` setting on Settings → Calibre is the browser-facing
 CWA base URL. When configured, the UI links a Calibre book ID to CWA's
 `/book/{id}` detail route (respecting a configured path prefix). It does not
 infer a web URL from the ingest folder or Calibre plugin URL; unsafe or unset
 URLs hide the link. This is navigation only, not the #8 write-back feature.
+
+### Optional audit-tag write-back (#8)
+
+`calibre.audit_tag_write_enabled` defaults to `false` independently of
+`calibre.authoritative_library_enabled`. Enable it with an admin `PUT
+/api/v1/setting/calibre.audit_tag_write_enabled` and body `{"value":"true"}`
+only after configuring authoritative mode and a writable Calibre library.
+There is no tag-name or field-name setting. Management of `BinderyMismatch`
+is the **sole sanctioned Calibre metadata write-back exception**; ownership,
+matching and review still work when it is off. Disabling it stops all tag
+writes, including removals; it does not clean up existing tags.
+
+The desired tag set comes from committed finding rows: one or more
+`unresolved` + `needs_review` findings for a Calibre book means tag present;
+ignored, resolved, unmatched and ambiguous findings do not keep it. After each
+full audit/reconciliation and each successful review ignore, Bindery makes one
+indexed Bindery query for distinct actionable Calibre IDs and one bulk Calibre
+query for existing mismatch-tag links, then applies only the differences.
+Multiple findings on a book cause at most one change. An ignored last finding
+removes the tag immediately; resolution removes it on the next audit. This
+tag is a review signal, **not** a statement that Calibre's metadata is wrong:
+provider evidence is advisory. When a match is lost, the historical finding
+is `unmatched`, not clean, but it cannot authorize a current mismatch tag.
+
+The purpose-built writer opens a separate `metadata.db` handle with `mode=rw`
+(never creates a database). It inserts only the fixed tag into `tags`, adds
+or removes only its rows in `books_tags_link`, and does not update `books`,
+author, series, identifier, cover, comments or other metadata tables. Unlike
+`calibredb set_metadata --field tags:...`, it never replaces the whole tag
+collection, so unrelated tag links are not replaced. It does not require
+`calibredb` in the distroless image; the Calibre library mount must be
+writable by Bindery's UID. Calibre applications that cache metadata may need
+a refresh to show external SQLite changes, and external concurrent writers
+should be tested against the actual library deployment before enabling this
+opt-in. Direct SQLite schema changes in future Calibre versions may require
+updating this narrowly scoped writer; failure leaves the audit usable.
+
+Audit persistence finishes before any Calibre write. Link differences are
+applied in 256-book SQL batches (one transaction per add batch and one atomic
+DELETE per removal batch), rather than per-book writes. A tag failure is logged
+and reported in the audit result's optional `tagError` (review-ignore keeps its
+204 result because the decision was already saved). Earlier batches stay
+applied after a partial failure; every later audit retries the entire
+projection even if zero findings changed. No Bindery transaction remains open
+during external writes. The shared service mutex serializes audits,
+reconciliation and review projection within one Bindery process; independent
+Bindery instances should not both manage the same library's tag.
 
 ## Decisions worth restating
 

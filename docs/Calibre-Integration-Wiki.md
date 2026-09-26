@@ -97,9 +97,15 @@ Library import copies Calibre's books into Bindery's catalogue, so an owned book
 
 - **It is off by default and changes nothing while off.** The write integration, the CWA mirror, library import and the drop folder all behave exactly as described above.
 - **It needs a Calibre library path.** Turning the mode on without **Library path** set is refused, and clearing the path while the mode is on is refused. Turning the mode off is always allowed.
-- **Audit is backend-only for now.** It records unresolved, ignored, resolved and unmatched findings in Bindery's database; the review UI is a separate planned slice. It never corrects or tags Calibre metadata.
+- **Audit and review remain advisory.** Activity → Calibre audit shows unresolved, ignored, resolved and unmatched comparisons; admin reviewers may ignore a finding or run a background recheck. Bindery never corrects curated Calibre metadata. Optionally, a separate write-back setting can manage only the `BinderyMismatch` tag for unresolved actionable findings (see below).
 
-The authority boundary, the read-only rule, what Bindery may persist about a match, and the limits planned for the audit and any future write back are recorded in [`docs/design/calibre-authoritative-library.md`](design/calibre-authoritative-library.md).
+#### Optional `BinderyMismatch` tag in Calibre/CWA
+
+This is the **sole sanctioned write-back exception** for existing Calibre books; it is independently opt-in and **off by default**, even when authoritative mode is on. After setting the Calibre library path and enabling authoritative mode, an admin may set `calibre.audit_tag_write_enabled` to `true` with `PUT /api/v1/setting/calibre.audit_tag_write_enabled` and `{"value":"true"}`. The Calibre library mount must be writable by Bindery; the official image does not need `calibredb`. There is no separate toggle on the Calibre settings tab yet. Disable it by storing `false`: this stops **all** tag writes and deliberately does not remove existing tags.
+
+A book gets the tag when at least one current unresolved, actionable (`needs_review`) finding exists. Ignoring the last such finding removes it after the review action; resolving the last one removes it on the next audit. Ambiguous, ignored, resolved and unmatched findings do not retain the tag. Other tags are preserved. A failed tag write does not undo review decisions or audit findings: check the warning log or the recheck result's `tagError`, correct library write permissions and recheck to retry. Calibre/CWA may cache metadata; refresh the Calibre view if it does not immediately reflect an external tag change. Test concurrency with your deployment's Calibre/CWA instance before opting in. The authoritative reader stays read-only, and no title, author, identifier, series, date, cover or comments are written by this capability.
+
+The authority boundary, the read-only core, and the sole optional tag-write exception are recorded in [`docs/design/calibre-authoritative-library.md`](design/calibre-authoritative-library.md).
 
 ## Troubleshooting
 
