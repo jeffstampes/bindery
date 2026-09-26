@@ -2,6 +2,8 @@ package calibre
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/vavallee/bindery/internal/db"
@@ -410,5 +412,399 @@ func TestAuthoritativeService_Reconcile_FailsClosedOnHydrationErrors(t *testing.
 	}
 	if res2 != nil {
 		t.Errorf("Reconcile returned result %+v on hydration error, want nil", res2)
+	}
+}
+
+type trackingAuthoritativeLibrary struct {
+	calibreBooks          []CalibreBook
+	countCalls            atomic.Int32
+	getBookCalls          atomic.Int32
+	booksCalls            atomic.Int32
+	allBooksCalls         atomic.Int32
+	findByIdentifierCalls atomic.Int32
+	closeCalls            atomic.Int32
+}
+
+func (t *trackingAuthoritativeLibrary) Count(ctx context.Context) (int, error) {
+	t.countCalls.Add(1)
+	return len(t.calibreBooks), nil
+}
+
+func (t *trackingAuthoritativeLibrary) GetBook(ctx context.Context, id int64) (*CalibreBook, error) {
+	t.getBookCalls.Add(1)
+	for _, b := range t.calibreBooks {
+		if b.CalibreID == id {
+			return &b, nil
+		}
+	}
+	return nil, ErrBookNotFound
+}
+
+func (t *trackingAuthoritativeLibrary) Books(ctx context.Context, fn func(CalibreBook) error) error {
+	t.booksCalls.Add(1)
+	for _, b := range t.calibreBooks {
+		if err := fn(b); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t *trackingAuthoritativeLibrary) AllBooks(ctx context.Context) ([]CalibreBook, error) {
+	t.allBooksCalls.Add(1)
+	return t.calibreBooks, nil
+}
+
+func (t *trackingAuthoritativeLibrary) FindByIdentifier(ctx context.Context, idType, idVal string) ([]CalibreBook, error) {
+	t.findByIdentifierCalls.Add(1)
+	var found []CalibreBook
+	for _, b := range t.calibreBooks {
+		if b.Identifiers[idType] == idVal {
+			found = append(found, b)
+		}
+	}
+	return found, nil
+}
+
+func (t *trackingAuthoritativeLibrary) Close() error {
+	t.closeCalls.Add(1)
+	return nil
+}
+
+func TestAuthoritativeService_Reconcile_BulkSnapshotNoPerReferenceReads(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatalf("OpenMemory: %v", err)
+	}
+	defer database.Close()
+
+	settings := db.NewSettingsRepo(database)
+	crossRef := db.NewCalibreCrossReferenceRepo(database)
+	books := db.NewBookRepo(database)
+	editions := db.NewEditionRepo(database)
+	authors := db.NewAuthorRepo(database)
+
+	ctx := context.Background()
+	_ = settings.Set(ctx, "calibre.authoritative_library_enabled", "true")
+	_ = settings.Set(ctx, "calibre.library_path", "/fake/calibre/path")
+
+	author := &models.Author{Name: "Alice Author"}
+	if err := authors.Create(ctx, author); err != nil {
+		t.Fatalf("create author: %v", err)
+	}
+
+	var calibreBooks []CalibreBook
+
+	// 1. Many unchanged existing matches (10 books)
+	const unchangedCount = 10
+	for i := 1; i <= unchangedCount; i++ {
+		cID := int64(i)
+		isbn := fmt.Sprintf("978100000000%d", i)
+		cb := CalibreBook{
+			CalibreID: cID,
+			Title:     fmt.Sprintf("Unchanged Book %d", i),
+			ISBN:      isbn,
+			Authors:   []CalibreAuthor{{CalibreID: cID, Name: "Alice Author"}},
+			Identifiers: map[string]string{
+				"isbn": isbn,
+			},
+		}
+		calibreBooks = append(calibreBooks, cb)
+
+		b := &models.Book{
+			AuthorID:  author.ID,
+			Title:     cb.Title,
+			SortTitle: NormalizeTitle(cb.Title),
+			ForeignID: fmt.Sprintf("fid-unchanged-%d", i),
+			Status:    models.BookStatusWanted,
+			Monitored: true,
+		}
+		if err := books.Create(ctx, b); err != nil {
+			t.Fatalf("create unchanged book %d: %v", i, err)
+		}
+		ed := &models.Edition{
+			BookID:    b.ID,
+			ForeignID: fmt.Sprintf("ed-unchanged-%d", i),
+			ISBN13:    &isbn,
+		}
+		if err := editions.Upsert(ctx, ed); err != nil {
+			t.Fatalf("create edition for unchanged book %d: %v", i, err)
+		}
+
+		fp := CalculateFingerprint(&cb)
+		ref := &models.CalibreWorkCrossReference{
+			BookID:             b.ID,
+			CalibreID:          cID,
+			MatchMethod:        "identifier:isbn",
+			Confidence:         models.CalibreMatchConfidenceExact,
+			Status:             models.CalibreMatchStatusMatched,
+			CalibreFingerprint: fp,
+		}
+		if err := crossRef.UpsertCrossReference(ctx, ref); err != nil {
+			t.Fatalf("upsert cross-reference for unchanged book %d: %v", i, err)
+		}
+	}
+
+	// 2. Changed fingerprint that still matches the same Calibre book
+	cb11 := CalibreBook{
+		CalibreID: 11,
+		Title:     "Book Eleven (Edited)",
+		ISBN:      "9781111111111",
+		Authors:   []CalibreAuthor{{CalibreID: 11, Name: "Alice Author"}},
+		Identifiers: map[string]string{
+			"isbn": "9781111111111",
+		},
+	}
+	calibreBooks = append(calibreBooks, cb11)
+
+	b11 := &models.Book{
+		AuthorID:  author.ID,
+		Title:     "Book Eleven",
+		SortTitle: "book eleven",
+		ForeignID: "fid-changed-same-11",
+		Status:    models.BookStatusWanted,
+		Monitored: true,
+	}
+	if err := books.Create(ctx, b11); err != nil {
+		t.Fatalf("create book 11: %v", err)
+	}
+	isbn11 := "9781111111111"
+	if err := editions.Upsert(ctx, &models.Edition{BookID: b11.ID, ForeignID: "ed-11", ISBN13: &isbn11}); err != nil {
+		t.Fatalf("create edition 11: %v", err)
+	}
+	oldFP11 := "sha256:stale_fingerprint_eleven_0000"
+	ref11 := &models.CalibreWorkCrossReference{
+		BookID:             b11.ID,
+		CalibreID:          11,
+		MatchMethod:        "identifier:isbn",
+		Confidence:         models.CalibreMatchConfidenceExact,
+		Status:             models.CalibreMatchStatusMatched,
+		CalibreFingerprint: oldFP11,
+	}
+	if err := crossRef.UpsertCrossReference(ctx, ref11); err != nil {
+		t.Fatalf("upsert cross-reference 11: %v", err)
+	}
+
+	// 3. Changed fingerprint that resolves to another Calibre book
+	cb12 := CalibreBook{
+		CalibreID: 12,
+		Title:     "Old Book 12 Changed",
+		ISBN:      "9781212121212",
+		Authors:   []CalibreAuthor{{CalibreID: 12, Name: "Alice Author"}},
+		Identifiers: map[string]string{
+			"isbn": "9781212121212",
+		},
+	}
+	cb13 := CalibreBook{
+		CalibreID: 13,
+		Title:     "Book Moved To 13",
+		ISBN:      "9781313131313",
+		Authors:   []CalibreAuthor{{CalibreID: 13, Name: "Alice Author"}},
+		Identifiers: map[string]string{
+			"isbn": "9781313131313",
+		},
+	}
+	calibreBooks = append(calibreBooks, cb12, cb13)
+
+	b12 := &models.Book{
+		AuthorID:  author.ID,
+		Title:     "Book Moved To 13",
+		SortTitle: "book moved to 13",
+		ForeignID: "fid-changed-moved-12",
+		Status:    models.BookStatusWanted,
+		Monitored: true,
+	}
+	if err := books.Create(ctx, b12); err != nil {
+		t.Fatalf("create book 12: %v", err)
+	}
+	isbn13 := "9781313131313"
+	if err := editions.Upsert(ctx, &models.Edition{BookID: b12.ID, ForeignID: "ed-12", ISBN13: &isbn13}); err != nil {
+		t.Fatalf("create edition 12: %v", err)
+	}
+	ref12 := &models.CalibreWorkCrossReference{
+		BookID:             b12.ID,
+		CalibreID:          12, // originally pointed to 12
+		MatchMethod:        "identifier:isbn",
+		Confidence:         models.CalibreMatchConfidenceExact,
+		Status:             models.CalibreMatchStatusMatched,
+		CalibreFingerprint: "sha256:stale_fp_pointing_to_12",
+	}
+	if err := crossRef.UpsertCrossReference(ctx, ref12); err != nil {
+		t.Fatalf("upsert cross-reference 12: %v", err)
+	}
+
+	// 4. Ambiguous persisted reference revalidation
+	cb14a := CalibreBook{
+		CalibreID: 14,
+		Title:     "Ambiguous Work",
+		ISBN:      "9781414141414",
+		Authors:   []CalibreAuthor{{CalibreID: 14, Name: "Alice Author"}},
+		Identifiers: map[string]string{
+			"isbn": "9781414141414",
+		},
+	}
+	cb14b := CalibreBook{
+		CalibreID: 15,
+		Title:     "Ambiguous Work Duplicate",
+		ISBN:      "9781414141414",
+		Authors:   []CalibreAuthor{{CalibreID: 15, Name: "Alice Author"}},
+		Identifiers: map[string]string{
+			"isbn": "9781414141414",
+		},
+	}
+	calibreBooks = append(calibreBooks, cb14a, cb14b)
+
+	b14 := &models.Book{
+		AuthorID:  author.ID,
+		Title:     "Ambiguous Work",
+		SortTitle: "ambiguous work",
+		ForeignID: "fid-ambiguous-14",
+		Status:    models.BookStatusWanted,
+		Monitored: true,
+	}
+	if err := books.Create(ctx, b14); err != nil {
+		t.Fatalf("create book 14: %v", err)
+	}
+	isbn14 := "9781414141414"
+	if err := editions.Upsert(ctx, &models.Edition{BookID: b14.ID, ForeignID: "ed-14", ISBN13: &isbn14}); err != nil {
+		t.Fatalf("create edition 14: %v", err)
+	}
+	ref14 := &models.CalibreWorkCrossReference{
+		BookID:           b14.ID,
+		CalibreID:        0,
+		MatchMethod:      "identifier:ambiguous",
+		Confidence:       models.CalibreMatchConfidenceAmbiguous,
+		Status:           models.CalibreMatchStatusAmbiguous,
+		MatchDetailsJSON: `{"candidates":[14,15]}`,
+	}
+	if err := crossRef.UpsertCrossReference(ctx, ref14); err != nil {
+		t.Fatalf("upsert cross-reference 14: %v", err)
+	}
+
+	// 5. Missing Calibre ID becoming stale
+	b15 := &models.Book{
+		AuthorID:  author.ID,
+		Title:     "Missing Book",
+		SortTitle: "missing book",
+		ForeignID: "fid-missing-15",
+		Status:    models.BookStatusWanted,
+		Monitored: true,
+	}
+	if err := books.Create(ctx, b15); err != nil {
+		t.Fatalf("create book 15: %v", err)
+	}
+	isbn15 := "9781515151515"
+	if err := editions.Upsert(ctx, &models.Edition{BookID: b15.ID, ForeignID: "ed-15", ISBN13: &isbn15}); err != nil {
+		t.Fatalf("create edition 15: %v", err)
+	}
+	ref15 := &models.CalibreWorkCrossReference{
+		BookID:             b15.ID,
+		CalibreID:          9999, // 9999 does NOT exist in Calibre library
+		MatchMethod:        "identifier:isbn",
+		Confidence:         models.CalibreMatchConfidenceExact,
+		Status:             models.CalibreMatchStatusMatched,
+		CalibreFingerprint: "sha256:fp_missing_9999",
+	}
+	if err := crossRef.UpsertCrossReference(ctx, ref15); err != nil {
+		t.Fatalf("upsert cross-reference 15: %v", err)
+	}
+
+	tracker := &trackingAuthoritativeLibrary{calibreBooks: calibreBooks}
+
+	svc := NewAuthoritativeService(settings, crossRef, books).
+		WithEditions(editions).
+		WithReaderFactory(func(path string) (AuthoritativeLibrary, error) {
+			return tracker, nil
+		})
+
+	res, err := svc.Reconcile(ctx)
+	if err != nil {
+		t.Fatalf("Reconcile failed: %v", err)
+	}
+
+	// --- DETERMINISTIC EVIDENCE: Proving no per-reference Calibre reads ---
+	if calls := tracker.allBooksCalls.Load(); calls != 1 {
+		t.Errorf("AllBooks calls = %d, want 1 (single bulk snapshot load)", calls)
+	}
+	if calls := tracker.getBookCalls.Load(); calls != 0 {
+		t.Errorf("GetBook calls = %d, want 0 (NO per-reference reads allowed)", calls)
+	}
+	if calls := tracker.findByIdentifierCalls.Load(); calls != 0 {
+		t.Errorf("FindByIdentifier calls = %d, want 0 (NO per-reference reads allowed)", calls)
+	}
+	if calls := tracker.booksCalls.Load(); calls != 0 {
+		t.Errorf("Books calls = %d, want 0", calls)
+	}
+	if calls := tracker.countCalls.Load(); calls != 0 {
+		t.Errorf("Count calls = %d, want 0", calls)
+	}
+
+	// --- VERIFY REVALIDATION RESULTS FOR ALL 5 COVERAGE CASES ---
+	// Total books: 10 unchanged + 1 changed FP same + 1 changed FP moved + 1 ambiguous + 1 missing ID = 14 books
+	if res.TotalBinderyBooks != 14 {
+		t.Errorf("TotalBinderyBooks = %d, want 14", res.TotalBinderyBooks)
+	}
+	// Revalidated = 10 (unchanged) + 1 (changed FP same) + 1 (changed FP moved) + 1 (ambiguous) = 13
+	if res.Revalidated != 13 {
+		t.Errorf("Revalidated = %d, want 13", res.Revalidated)
+	}
+	// Stale = 1 (missing ID)
+	if res.Stale != 1 {
+		t.Errorf("Stale = %d, want 1", res.Stale)
+	}
+
+	// 1. Unchanged existing matches remain matched
+	for i := 1; i <= unchangedCount; i++ {
+		r, err := crossRef.GetByBookID(ctx, int64(i))
+		if err != nil || r == nil {
+			t.Fatalf("GetByBookID(%d): %v", i, err)
+		}
+		if r.Status != models.CalibreMatchStatusMatched || r.CalibreID != int64(i) {
+			t.Errorf("unchanged book %d crossRef status=%s ID=%d, want matched/%d", i, r.Status, r.CalibreID, i)
+		}
+	}
+
+	// 2. Changed fingerprint that still matches same Calibre book
+	r11, err := crossRef.GetByBookID(ctx, b11.ID)
+	if err != nil || r11 == nil {
+		t.Fatalf("GetByBookID(b11): %v", err)
+	}
+	expectedFP11 := CalculateFingerprint(&cb11)
+	if r11.Status != models.CalibreMatchStatusMatched || r11.CalibreID != 11 {
+		t.Errorf("changed FP same book status=%s ID=%d, want matched/11", r11.Status, r11.CalibreID)
+	}
+	if r11.CalibreFingerprint != expectedFP11 {
+		t.Errorf("changed FP same book FP=%q, want updated %q", r11.CalibreFingerprint, expectedFP11)
+	}
+
+	// 3. Changed fingerprint that resolves to another Calibre book (moved to Calibre ID 13)
+	r12, err := crossRef.GetByBookID(ctx, b12.ID)
+	if err != nil || r12 == nil {
+		t.Fatalf("GetByBookID(b12): %v", err)
+	}
+	expectedFP13 := CalculateFingerprint(&cb13)
+	if r12.Status != models.CalibreMatchStatusMatched || r12.CalibreID != 13 {
+		t.Errorf("changed FP moved book status=%s ID=%d, want matched/13", r12.Status, r12.CalibreID)
+	}
+	if r12.CalibreFingerprint != expectedFP13 {
+		t.Errorf("changed FP moved book FP=%q, want %q", r12.CalibreFingerprint, expectedFP13)
+	}
+
+	// 4. Ambiguous persisted reference revalidation
+	r14, err := crossRef.GetByBookID(ctx, b14.ID)
+	if err != nil || r14 == nil {
+		t.Fatalf("GetByBookID(b14): %v", err)
+	}
+	if r14.Status != models.CalibreMatchStatusAmbiguous || r14.CalibreID != 0 {
+		t.Errorf("ambiguous ref status=%s ID=%d, want ambiguous/0", r14.Status, r14.CalibreID)
+	}
+
+	// 5. Missing Calibre ID becoming stale
+	r15, err := crossRef.GetByBookID(ctx, b15.ID)
+	if err != nil || r15 == nil {
+		t.Fatalf("GetByBookID(b15): %v", err)
+	}
+	if r15.Status != models.CalibreMatchStatusStale {
+		t.Errorf("missing Calibre ID status=%s, want stale", r15.Status)
 	}
 }

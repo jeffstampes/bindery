@@ -14,11 +14,12 @@ import (
 // AuthoritativeService provides the narrow ownership abstraction and reconciliation
 // integration for Calibre/CWA authoritative-library mode (#5).
 type AuthoritativeService struct {
-	settings *db.SettingsRepo
-	crossRef *db.CalibreCrossReferenceRepo
-	books    *db.BookRepo
-	editions *db.EditionRepo
-	audits   *db.CalibreAuditRepo
+	settings      *db.SettingsRepo
+	crossRef      *db.CalibreCrossReferenceRepo
+	books         *db.BookRepo
+	editions      *db.EditionRepo
+	audits        *db.CalibreAuditRepo
+	readerFactory func(string) (AuthoritativeLibrary, error)
 	// Serialize long audit snapshots and authoritative reconciliation within
 	// the single service instance shared by scheduled/manual runs. Otherwise a
 	// slower pass could commit older findings after a newer pass.
@@ -37,6 +38,13 @@ func NewAuthoritativeService(settings *db.SettingsRepo, crossRef *db.CalibreCros
 // WithEditions registers an EditionRepo to supply persisted edition data during reconciliation.
 func (s *AuthoritativeService) WithEditions(editions *db.EditionRepo) *AuthoritativeService {
 	s.editions = editions
+	return s
+}
+
+// WithReaderFactory registers a custom reader factory function, primarily used for testing
+// to supply instrumented or mock AuthoritativeLibrary implementations.
+func (s *AuthoritativeService) WithReaderFactory(factory func(string) (AuthoritativeLibrary, error)) *AuthoritativeService {
+	s.readerFactory = factory
 	return s
 }
 
@@ -212,7 +220,11 @@ func (s *AuthoritativeService) Reconcile(ctx context.Context) (*ReconcileResult,
 		return nil, ErrAuthoritativeDisabled
 	}
 
-	reader, err := OpenAuthoritativeReader(libPath)
+	factory := s.readerFactory
+	if factory == nil {
+		factory = OpenAuthoritativeReader
+	}
+	reader, err := factory(libPath)
 	if err != nil {
 		return nil, fmt.Errorf("open authoritative reader (%s): %w", libPath, err)
 	}
@@ -286,8 +298,8 @@ func (s *AuthoritativeService) Reconcile(ctx context.Context) (*ReconcileResult,
 		}
 
 		if existingRef, ok := existingMap[b.ID]; ok {
-			// Revalidate existing reference
-			updated, stale, err := RevalidateCrossReference(ctx, &existingRef, b, reader)
+			// Revalidate existing reference using single in-memory snapshot index
+			updated, stale, err := RevalidateCrossReferenceWithIndex(ctx, &existingRef, b, idx)
 			if err != nil {
 				slog.Warn("authoritative reconcile: revalidation failed", "book_id", b.ID, "error", err)
 				continue
