@@ -336,6 +336,11 @@ var settingDescriptors = []SettingDescriptor{
 		State:       SettingStateActive,
 	},
 	{
+		Key: SettingCalibreAuditTagWriteEnabled, Type: SettingTypeBool, Default: "false",
+		Description: "Independently opt in to managing only the BinderyMismatch tag on Calibre books with unresolved, actionable audit findings. Requires authoritative mode and a writable Calibre library.",
+		State:       SettingStateActive,
+	},
+	{
 		Key: "calibre.last_import_at", Type: SettingTypeString, Default: "",
 		Description: "RFC3339 timestamp of the last Calibre library import, written by the importer and shown on the Calibre settings tab.",
 		State:       SettingStateInternal,

@@ -327,6 +327,10 @@ func TestValidateSettingValue_KnownKeysUnchanged(t *testing.T) {
 		{"authoritative library accepts false", SettingCalibreAuthoritativeLibraryEnabled, "false", false},
 		{"authoritative library accepts empty", SettingCalibreAuthoritativeLibraryEnabled, "", false},
 		{"authoritative library rejects other", SettingCalibreAuthoritativeLibraryEnabled, "yes", true},
+		{"audit tag accepts true", SettingCalibreAuditTagWriteEnabled, "true", false},
+		{"audit tag accepts false", SettingCalibreAuditTagWriteEnabled, "false", false},
+		{"audit tag accepts empty", SettingCalibreAuditTagWriteEnabled, "", false},
+		{"audit tag rejects other", SettingCalibreAuditTagWriteEnabled, "yes", true},
 
 		{"calibre mode accepts calibredb", SettingCalibreMode, "calibredb", false},
 		{"calibre mode accepts empty", SettingCalibreMode, "", false},

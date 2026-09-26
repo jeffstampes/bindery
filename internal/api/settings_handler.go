@@ -501,6 +501,13 @@ func (h *SettingsHandler) validateSettingDependencies(ctx context.Context, key, 
 		if s, _ := h.settings.Get(ctx, SettingCalibreLibraryPath); s == nil || strings.TrimSpace(s.Value) == "" {
 			return fmt.Errorf("calibre.authoritative_library_enabled requires calibre.library_path — set the Calibre library path first")
 		}
+	case SettingCalibreAuditTagWriteEnabled:
+		if !strings.EqualFold(value, "true") {
+			return nil
+		}
+		if s, _ := h.settings.Get(ctx, SettingCalibreAuthoritativeLibraryEnabled); s == nil || !strings.EqualFold(s.Value, "true") {
+			return fmt.Errorf("calibre.audit_tag_write_enabled requires calibre.authoritative_library_enabled — enable authoritative mode first")
+		}
 	case SettingCalibreLibraryPath:
 		// The same rule from the other side: clearing the library path while
 		// authoritative-library mode is on would leave the mode with nothing
@@ -750,14 +757,13 @@ func validateSettingValue(key, value string) error {
 		default:
 			return fmt.Errorf("import.mode %q is not one of: auto, move, copy, hardlink, external", value)
 		}
-	case SettingCalibreAuthoritativeLibraryEnabled:
-		// Boolean flag; empty or "false" = off (the default). Only the two
-		// canonical values are accepted so a typo cannot be misread as
-		// truthy and quietly hand metadata authority to Calibre.
+	case SettingCalibreAuthoritativeLibraryEnabled, SettingCalibreAuditTagWriteEnabled:
+		// Both opt-ins are independent, canonical boolean settings. Unset
+		// leaves the audit tag writer completely disabled.
 		if value == "" || strings.EqualFold(value, "true") || strings.EqualFold(value, "false") {
 			return nil
 		}
-		return fmt.Errorf("calibre.authoritative_library_enabled %q is not one of: true, false", value)
+		return fmt.Errorf("%s %q is not one of: true, false", key, value)
 	case SettingCalibreMode:
 		// Canonical values only. An empty string falls through to the
 		// default (off) handled by LoadCalibreMode; anything else must

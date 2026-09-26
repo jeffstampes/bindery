@@ -16,7 +16,8 @@ import (
 	"github.com/vavallee/bindery/internal/models"
 )
 
-// calibreAuditService is the existing read-only audit and availability surface.
+// calibreAuditService is the existing audit and availability surface.
+// Optional tag projection is implemented by a separate capability.
 type calibreAuditService interface {
 	IsEnabled(context.Context) bool
 	Audit(context.Context) (*calibre.AuditResult, error)
@@ -33,7 +34,8 @@ type CalibreAuditRecheckStatus struct {
 }
 
 // CalibreAuditHandler exposes advisory findings and a tracked manual audit to admins.
-// It does not write to Calibre or turn provider evidence into owned metadata.
+// It never edits curated Calibre metadata; an opted-in service may project
+// review state through only the Bindery-owned mismatch tag.
 type CalibreAuditHandler struct {
 	service  calibreAuditService
 	findings *db.CalibreAuditRepo
@@ -129,12 +131,20 @@ func (h *CalibreAuditHandler) Ignore(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "finding changed or is no longer unresolved; refresh the review queue"})
 		return
 	}
+	// Ignore is already committed. A tag failure cannot undo the reviewer's
+	// decision; the next recheck retries against committed finding state.
+	if reconciler, ok := h.service.(interface{ ReconcileAuditTags(context.Context) error }); ok {
+		if err := reconciler.ReconcileAuditTags(r.Context()); err != nil {
+			slog.Warn("calibre audit ignore: tag reconciliation failed; decision retained", "finding_id", id, "error", err)
+		}
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Recheck accepts a full read-only audit for background execution. The
-// handler's gate rejects duplicate manual starts; the shared service's passMu
-// continues to serialize this with scheduled audit/reconciliation passes.
+// Recheck accepts a full audit for background execution. Its Calibre read
+// snapshot remains read-only; optional tag projection runs only after the
+// findings commit. The handler's gate rejects duplicate manual starts; the
+// shared service's passMu continues to serialize this with scheduled passes.
 func (h *CalibreAuditHandler) Recheck(w http.ResponseWriter, r *http.Request) {
 	if !h.available(w, r) {
 		return

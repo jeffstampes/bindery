@@ -37,8 +37,11 @@ const (
 	// without calibre.library_path, and that path cannot be cleared while
 	// authoritative mode is enabled.
 	SettingCalibreAuthoritativeLibraryEnabled = "calibre.authoritative_library_enabled"
-	SettingCalibrePluginURL                   = "calibre.plugin_url"
-	SettingCalibrePluginAPIKey                = "calibre.plugin_api_key"
+	// SettingCalibreAuditTagWriteEnabled independently opts in to managing the
+	// sole Bindery-owned audit tag on existing Calibre books. Unset is off.
+	SettingCalibreAuditTagWriteEnabled = "calibre.audit_tag_write_enabled"
+	SettingCalibrePluginURL            = "calibre.plugin_url"
+	SettingCalibrePluginAPIKey         = "calibre.plugin_api_key"
 	// SettingCalibrePushPathRemap translates Bindery library paths to the
 	// prefix the Calibre (Bridge plugin) container sees before a push, in
 	// pathmap "from:to[,from:to]" form — e.g. "/books:/mnt/user/media/books".

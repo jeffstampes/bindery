@@ -237,6 +237,14 @@ func (s *AuthoritativeService) Reconcile(ctx context.Context) (*ReconcileResult,
 	}
 
 	if len(binderyBooks) == 0 {
+		// A now-empty Bindery catalogue still needs to retire old findings
+		// and any Bindery-owned tags left on Calibre books.
+		if s.audits != nil {
+			res.Audit, err = s.auditSnapshot(ctx, calibreBooks, binderyBooks, nil, nil, NewLibraryIndex(calibreBooks))
+			if err != nil {
+				return res, fmt.Errorf("reconciliation completed but calibre metadata audit failed: %w", err)
+			}
+		}
 		return res, nil
 	}
 

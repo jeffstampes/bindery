@@ -3,6 +3,7 @@ package calibre
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 
 	"github.com/vavallee/bindery/internal/db"
@@ -17,6 +18,10 @@ type AuditResult struct {
 	ComparedBooks     int `json:"comparedBooks"`
 	Findings          int `json:"findings"`
 	Updated           int `json:"updated"`
+	// TagUpdated counts changed Calibre book links; TagError reports a failed
+	// optional write without rolling back committed advisory findings.
+	TagUpdated int    `json:"tagUpdated,omitempty"`
+	TagError   string `json:"tagError,omitempty"`
 }
 
 // WithAudit enables the advisory audit after reconciliation. Existing callers
@@ -27,9 +32,11 @@ func (s *AuthoritativeService) WithAudit(repo *db.CalibreAuditRepo) *Authoritati
 }
 
 // Audit rereads both catalogues and rechecks only confidently matched,
-// externally sourced owned books. It does not change ownership matches or any
-// metadata; the only writes are to Bindery's finding table. An unconfigured
-// audit, missing data source, or disabled mode cannot clear existing findings.
+// externally sourced owned books. It never changes ownership matches or
+// curated metadata. Findings commit in Bindery first; the separately opted-in
+// BinderyMismatch tag projection runs afterward and may fail independently.
+// An unconfigured audit, missing data source, or disabled mode cannot clear
+// existing findings.
 func (s *AuthoritativeService) Audit(ctx context.Context) (*AuditResult, error) {
 	if !s.IsEnabled(ctx) {
 		return nil, ErrAuthoritativeDisabled
@@ -172,6 +179,14 @@ func (s *AuthoritativeService) auditSnapshot(
 		return nil, fmt.Errorf("persist calibre audit findings: %w", err)
 	}
 	result.Updated = written
+	result.TagUpdated, err = s.reconcileAuditTags(ctx)
+	if err != nil {
+		// Findings are already committed: never misrepresent them or require a
+		// Calibre write for audit to succeed. A later full pass retries even if
+		// none of the finding rows change.
+		result.TagError = err.Error()
+		slog.Warn("calibre audit tag reconciliation failed; findings remain committed", "error", err)
+	}
 	return result, nil
 }
 

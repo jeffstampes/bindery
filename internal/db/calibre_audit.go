@@ -123,6 +123,31 @@ func scanCalibreAuditFindings(rows *sql.Rows, withTitle bool) ([]models.CalibreA
 	return findings, nil
 }
 
+// ActionableCalibreIDs returns distinct owned book IDs with unresolved,
+// needs-review findings. Ambiguous, ignored, resolved and unmatched evidence
+// cannot authorize a tag. One indexed query serves the whole library.
+func (r *CalibreAuditRepo) ActionableCalibreIDs(ctx context.Context) (map[int64]bool, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT DISTINCT calibre_id FROM calibre_metadata_audit_findings
+		WHERE state = ? AND assessment = ?`, models.CalibreAuditUnresolved, models.CalibreAuditNeedsReview)
+	if err != nil {
+		return nil, fmt.Errorf("list actionable calibre audit books: %w", err)
+	}
+	defer rows.Close()
+	ids := make(map[int64]bool)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan actionable calibre audit book: %w", err)
+		}
+		ids[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate actionable calibre audit books: %w", err)
+	}
+	return ids, nil
+}
+
 // Ignore records a human decision for exactly the comparison the reviewer saw.
 // A stale fingerprint or non-unresolved finding is not ignored. No metadata is
 // changed, and Apply will reopen it when materially compared values change.
