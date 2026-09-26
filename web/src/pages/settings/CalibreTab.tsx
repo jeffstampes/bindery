@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Link } from 'react-router'
 import Alert from '../../components/Alert'
 import {
   api,
@@ -73,6 +74,7 @@ function CalibreSection({
   const [pushRemapSaveResult, pushRemapSave] = useSaveResult()
   const [pluginKeySaveResult, pluginKeySave] = useSaveResult()
   const [cwaPathSaveResult, cwaPathSave] = useSaveResult()
+  const [cwaURLSaveResult, cwaURLSave] = useSaveResult()
   const [importProgress, setImportProgress] = useState<CalibreImportProgress | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
   const [syncProgress, setSyncProgress] = useState<CalibreSyncProgress | null>(null)
@@ -545,11 +547,12 @@ function CalibreSection({
                 {t('settings.calibre.authoritative.label', 'Calibre is authoritative for owned books')}
               </label>
               <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">
-                {t('settings.calibre.authoritative.hint', "Record intent to treat Calibre/CWA as the authority for books it holds. Authoritative mode is designed to read metadata.db read-only and never write to it. Live reading, matching, and owned-state integration arrive in later slices; enabling this setting does not yet change catalogue or ownership behavior.")}
+                {t('settings.calibre.authoritative.hint', 'When enabled, Bindery reads metadata.db without modifying it, matches owned works, and records advisory audit findings. Calibre/CWA remains the authority for owned metadata.')}
               </p>
               <p className="text-xs text-slate-600 dark:text-zinc-500 mt-1">
-                {t('settings.calibre.authoritative.staged', 'Records operator intent for Calibre/CWA to be the authority for owned-book metadata. Enabling this setting records your choice now; owned-book matching, live reading, and metadata audit arrive in later slices, so nothing changes in the catalogue yet.')}
+                {t('settings.calibre.authoritative.staged', 'Scheduled and manual reconciliation refresh ownership matches and audit findings without importing Calibre books into the Bindery catalogue.')}
               </p>
+              {authoritativeLibrary && !!settings['calibre.library_path']?.trim() && <Link to="/calibre/audit" className="text-sm text-emerald-700 dark:text-emerald-400 underline">{t('calibreAudit.title')}</Link>}
               {authoritativeSaveError && (
                 <p className="text-xs text-red-600 dark:text-red-400 mt-1">{authoritativeSaveError}</p>
               )}
@@ -562,6 +565,7 @@ function CalibreSection({
                 try {
                   await api.setSetting('calibre.authoritative_library_enabled', next)
                   setSettings(s => ({ ...s, 'calibre.authoritative_library_enabled': next }))
+                  window.dispatchEvent(new Event('calibre-audit-availability-change'))
                 } catch (err) {
                   // The backend refuses to enable the mode without a library
                   // path. Surface that instead of flipping the switch to a
@@ -607,6 +611,20 @@ function CalibreSection({
           {saveError?.key === 'cwa.ingest_path' && (
             <p className="text-xs text-red-600 dark:text-red-400 mt-1">{saveError.msg}</p>
           )}
+        </div>
+        <div className="mt-4">
+          <label htmlFor="cwa-web-url" className="block text-xs text-slate-600 dark:text-zinc-400 mb-1">{t('calibreAudit.webURLLabel')}</label>
+          <p className="text-xs text-fg-muted mb-2">{t('calibreAudit.webURLHint')}</p>
+          <div className="flex gap-2">
+            <input id="cwa-web-url" type="url" value={settings['cwa.web_url'] ?? ''}
+              onChange={e => setSettings(s => ({ ...s, 'cwa.web_url': e.target.value }))}
+              placeholder="https://cwa.example.org"
+              className="flex-1 bg-slate-200 dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded px-3 py-2 text-sm" />
+            <SaveButton result={cwaURLSaveResult} saving={saving === 'cwa.web_url'}
+              ariaLabel={t('calibreAudit.saveWebURL')}
+              onClick={() => cwaURLSave(() => saveSettingWithErrorThrowing('cwa.web_url'))} />
+          </div>
+          {saveError?.key === 'cwa.web_url' && <p role="alert" className="text-xs text-red-600 dark:text-red-400 mt-1">{saveError.msg}</p>}
         </div>
       </div>
 

@@ -52,8 +52,10 @@ type CalibreAuditEvidence struct {
 // an ignored finding is reopened if either side changes, not for formatting.
 // Resolved and unmatched rows retain the last evidence for review history.
 type CalibreAuditFinding struct {
-	ID                    int64                  `json:"id"`
-	BookID                int64                  `json:"bookId"`
+	ID     int64 `json:"id"`
+	BookID int64 `json:"bookId"`
+	// BookTitle is a read-only display projection, not persisted in audit findings.
+	BookTitle             string                 `json:"bookTitle,omitempty"`
 	CalibreID             int64                  `json:"calibreId"`
 	Field                 string                 `json:"field"`
 	EvidenceKey           string                 `json:"evidenceKey"`

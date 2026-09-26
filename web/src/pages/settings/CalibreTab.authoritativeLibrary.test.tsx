@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import CalibreTab from './CalibreTab'
+import { MemoryRouter } from 'react-router'
 import { api } from '../../api/client'
 
 // Issue #2: the Calibre/CWA authoritative-library toggle is opt-in. It reads
@@ -11,7 +12,7 @@ import { api } from '../../api/client'
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (key: string, fallback?: unknown) => (typeof fallback === 'string' ? fallback : key),
+    t: (key: string, fallback?: unknown) => key === 'calibreAudit.saveWebURL' ? 'Save CWA web address' : (typeof fallback === 'string' ? fallback : key),
     i18n: { changeLanguage: vi.fn() },
   }),
 }))
@@ -56,7 +57,7 @@ beforeEach(() => {
 
 describe('Calibre authoritative-library toggle', () => {
   it('is off when nothing is stored', async () => {
-    render(<CalibreTab />)
+    render(<MemoryRouter><CalibreTab /></MemoryRouter>)
     const toggle = await findToggle()
     expect(toggle).toHaveAttribute('aria-checked', 'false')
     expect(api.setSetting).not.toHaveBeenCalled()
@@ -64,14 +65,14 @@ describe('Calibre authoritative-library toggle', () => {
 
   it('reflects a stored true', async () => {
     seedSettings({ 'calibre.authoritative_library_enabled': 'true' })
-    render(<CalibreTab />)
+    render(<MemoryRouter><CalibreTab /></MemoryRouter>)
     const toggle = await screen.findByTitle('Disable authoritative-library mode')
     expect(toggle).toHaveAttribute('aria-checked', 'true')
   })
 
   it('saves true through the settings endpoint when switched on', async () => {
     seedSettings({ 'calibre.library_path': '/data/calibre' })
-    render(<CalibreTab />)
+    render(<MemoryRouter><CalibreTab /></MemoryRouter>)
     const toggle = await findToggle()
 
     fireEvent.click(toggle)
@@ -90,7 +91,7 @@ describe('Calibre authoritative-library toggle', () => {
       'calibre.library_path': '/data/calibre',
       'calibre.authoritative_library_enabled': 'true',
     })
-    render(<CalibreTab />)
+    render(<MemoryRouter><CalibreTab /></MemoryRouter>)
     const toggle = await screen.findByTitle('Disable authoritative-library mode')
 
     fireEvent.click(toggle)
@@ -104,7 +105,7 @@ describe('Calibre authoritative-library toggle', () => {
     vi.mocked(api.setSetting).mockRejectedValue(
       new Error('calibre.authoritative_library_enabled requires calibre.library_path'),
     )
-    render(<CalibreTab />)
+    render(<MemoryRouter><CalibreTab /></MemoryRouter>)
     const toggle = await findToggle()
 
     fireEvent.click(toggle)
@@ -115,10 +116,26 @@ describe('Calibre authoritative-library toggle', () => {
     expect(await findToggle()).toHaveAttribute('aria-checked', 'false')
   })
 
-  it('says the mode does not change the catalogue yet', async () => {
-    render(<CalibreTab />)
-    expect(
-      await screen.findByText(/nothing changes in the catalogue yet/),
-    ).toBeInTheDocument()
+  it('saves the optional CWA web address through settings', async () => {
+    render(<MemoryRouter><CalibreTab /></MemoryRouter>)
+    const input = await screen.findByLabelText('calibreAudit.webURLLabel')
+    fireEvent.change(input, { target: { value: 'https://cwa.example.org' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save CWA web address' }))
+    await waitFor(() => expect(api.setSetting).toHaveBeenCalledWith('cwa.web_url', 'https://cwa.example.org'))
+  })
+
+  it('links to review only when authoritative mode is enabled', async () => {
+    const { unmount } = render(<MemoryRouter><CalibreTab /></MemoryRouter>)
+    await findToggle()
+    expect(screen.queryByRole('link', { name: 'calibreAudit.title' })).not.toBeInTheDocument()
+    unmount()
+    seedSettings({ 'calibre.authoritative_library_enabled': 'true', 'calibre.library_path': '/library' })
+    render(<MemoryRouter><CalibreTab /></MemoryRouter>)
+    expect(await screen.findByRole('link', { name: 'calibreAudit.title' })).toHaveAttribute('href', '/calibre/audit')
+  })
+
+  it('describes the live read-only audit rather than promising no effect', async () => {
+    render(<MemoryRouter><CalibreTab /></MemoryRouter>)
+    expect(await screen.findByText(/records advisory audit findings/)).toBeInTheDocument()
   })
 })

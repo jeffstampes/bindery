@@ -1,7 +1,7 @@
 # Calibre/CWA authoritative-library mode — design contract
 
-Status: **accepted, implemented through the backend metadata audit (#6).**
-The review UI (#7) and any Calibre write-back (#8) remain planned. The
+Status: **accepted, implemented through the audit review UI (#7).**
+Any Calibre write-back (#8) remains planned. The
 configuration and implemented slices below are part of this branch.
 
 Tracking: [#1](https://github.com/jeffstampes/bindery/issues/1) ·
@@ -129,12 +129,12 @@ Each slice is checked against the authority invariants above.
 | Work ↔ Calibre matching | Implemented (#4) | Identifier-first matching, conservative author/title fallback, with provenance and confidence | 4, 5, 9 |
 | Owned-state integration | Implemented (#5) | A confident match marks a Bindery work owned/satisfied, without importing its metadata | 4, 5 |
 | Metadata audit | Implemented (#6) | Compare Calibre's metadata for owned books against stored external evidence and persist advisory findings | 6, 7, 9 |
-| Audit/review UI | Planned (#7) | Surface discrepancies for human decision | 7 |
+| Audit/review UI | Implemented (#7) | Admin review queue with bounded, filtered findings and ignore/recheck actions | 7 |
 | `BinderyMismatch` write-back | Planned (#8) | Optional, separately opt-in, one Bindery-owned tag | 3, 8 |
 
 Reconciliation satisfies ebook ownership for confident matches and runs the
-backend metadata audit. It creates no Calibre-backed catalogue book. There is
-no review UI (#7) or Calibre write-back (#8) in this slice.
+backend metadata audit. It creates no Calibre-backed catalogue book. The review
+UI never edits Calibre; write-back (#8) remains out of scope.
 
 ### Backend metadata audit (#6)
 
@@ -181,7 +181,8 @@ disappears, the finding becomes `unmatched` while retaining the ignored
 fingerprint, so the *identical* comparison can restore the ignore. Changed
 values or match evidence reopen it. Equal current values make a previous
 finding `resolved`; a missing confident match or lost comparable evidence makes
-it `unmatched`, not clean. No HTTP review endpoint or UI is included until #7.
+it `unmatched`, not clean. No HTTP review endpoint or UI was included in #6;
+#7 supplies them without changing the audit's lifecycle rules.
 
 The standalone audit reads Calibre's headers/authors/formats/identifiers/language
 in five bulk SQL queries (plus the read-only open probe), without a per-book
@@ -195,6 +196,44 @@ are linear in library size, stored evidence and finding count, not per-book
 database queries. The existing #5 reconciliation path still calls `GetBook`
 while revalidating prior matches; that earlier matching behavior is unchanged
 by the audit. The standalone `Audit` method avoids that path entirely.
+
+### Review queue (#7)
+
+Admins see **Activity → Calibre audit** (and a Settings → Calibre link) only
+when authoritative mode and a library path are configured. With the mode off,
+review endpoints return 404 and the ordinary app/navigation stays unchanged.
+The default queue shows unresolved findings; reviewers may filter by state,
+finding type and assessment, including historical `unmatched`/`resolved` rows.
+Each row shows Calibre's authoritative evidence beside stored external provider
+evidence, original source/provenance, match method/confidence, and audit reason.
+An ambiguous comparison is explicitly labelled; unmatched rows are historical,
+not proof of a current mismatch.
+
+Admin-only API routes under `/api/v1/calibre/audit`:
+
+- `GET ?state=&findingType=&assessment=&limit=&offset=` returns
+  `{items,total,limit,offset}` with newest-first stable ordering; default 50,
+  maximum 250 rows. The SQL counts filtered matches and decodes only one page,
+  using a single join to display the Bindery work title. No Calibre metadata is
+  copied into the Bindery catalogue.
+- `POST /{id}/ignore` takes `{comparisonFingerprint}` and returns 204 only for
+  the displayed, still-unresolved comparison; a stale decision returns 409.
+  The existing #6 fingerprint lifecycle continues to govern later rechecks.
+- `POST /recheck` accepts an existing full, read-only `Audit` snapshot as a
+  shutdown-tracked background task (`202 {running,startedAt}`); duplicate manual
+  starts return `409` with the running snapshot. `GET /recheck/status` returns
+  the current or most recent manual run (`running`, timestamps, and either
+  `result` or `error`). The UI polls and refreshes the queue on completion;
+  leaving the page or disconnecting does not stop an accepted audit. The state
+  lives in process memory (a restart clears it), and shutdown cancels/drains
+  the tracked job before DB close. The shared service lock still serializes
+  manual and scheduled audit/reconciliation passes; no Calibre writes occur.
+
+An optional `cwa.web_url` setting on Settings → Calibre is the browser-facing
+CWA base URL. When configured, the UI links a Calibre book ID to CWA's
+`/book/{id}` detail route (respecting a configured path prefix). It does not
+infer a web URL from the ingest folder or Calibre plugin URL; unsafe or unset
+URLs hide the link. This is navigation only, not the #8 write-back feature.
 
 ## Decisions worth restating
 

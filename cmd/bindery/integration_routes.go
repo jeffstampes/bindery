@@ -97,3 +97,21 @@ func registerCalibreIntegrationRoutes(r chi.Router, probe calibreProbeHandler, i
 		r.Get("/calibre/sync/status", sync.Status)
 	})
 }
+
+type calibreAuditRouteHandler interface {
+	List(http.ResponseWriter, *http.Request)
+	Recheck(http.ResponseWriter, *http.Request)
+	RecheckStatus(http.ResponseWriter, *http.Request)
+	Ignore(http.ResponseWriter, *http.Request)
+}
+
+// Audit review is admin-only; the handler additionally refuses disabled mode.
+func registerCalibreAuditRoutes(r chi.Router, h calibreAuditRouteHandler) {
+	r.Group(func(r chi.Router) {
+		r.Use(auth.RequireAdmin)
+		r.Get("/calibre/audit", h.List)
+		r.Post("/calibre/audit/recheck", h.Recheck)
+		r.Get("/calibre/audit/recheck/status", h.RecheckStatus)
+		r.Post("/calibre/audit/{id}/ignore", h.Ignore)
+	})
+}

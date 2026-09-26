@@ -35,14 +35,16 @@ const REQUESTER_NAV_KEYS: NavEntry[] = [
 // navGroupsFor is the top level nav for a role. Admins get Requests as a fourth
 // Activity tab; its pending count is rendered on the Activity entry and on the
 // tab itself.
-export function navGroupsFor(isAdmin: boolean, isRequester: boolean): NavEntry[] {
+export function navGroupsFor(isAdmin: boolean, isRequester: boolean, auditEnabled = false): NavEntry[] {
   if (isRequester) return REQUESTER_NAV_KEYS
   return [
     { to: '/', key: 'library', end: true, children: LIBRARY_TABS },
     {
       to: '/wanted',
       key: 'activity',
-      children: isAdmin ? [...ACTIVITY_TABS, { to: '/requests', key: 'requests' }] : ACTIVITY_TABS,
+      children: isAdmin
+        ? [...ACTIVITY_TABS, ...(auditEnabled ? [{ to: '/calibre/audit', key: 'calibreAudit' }] : []), { to: '/requests', key: 'requests' }]
+        : ACTIVITY_TABS,
     },
     { to: '/import', key: 'import' },
     { to: '/calendar', key: 'calendar' },

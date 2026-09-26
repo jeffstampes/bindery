@@ -41,6 +41,16 @@ func (h *stubIntegrationHandler) Status(w http.ResponseWriter, _ *http.Request) 
 	h.record("status", w)
 }
 
+func (h *stubIntegrationHandler) Recheck(w http.ResponseWriter, _ *http.Request) {
+	h.record("recheck", w)
+}
+func (h *stubIntegrationHandler) RecheckStatus(w http.ResponseWriter, _ *http.Request) {
+	h.record("recheck-status", w)
+}
+func (h *stubIntegrationHandler) Ignore(w http.ResponseWriter, _ *http.Request) {
+	h.record("ignore", w)
+}
+
 // newIntegrationRouter wires the three integration route helpers onto a fresh
 // router with one shared stub, mirroring how main.go mounts them.
 func newIntegrationRouter(h *stubIntegrationHandler) chi.Router {
@@ -48,6 +58,7 @@ func newIntegrationRouter(h *stubIntegrationHandler) chi.Router {
 	registerRootFolderRoutes(router, h)
 	registerGrimmoryRoutes(router, h)
 	registerCalibreIntegrationRoutes(router, h, h, h)
+	registerCalibreAuditRoutes(router, h)
 	return router
 }
 
@@ -71,6 +82,10 @@ func TestIntegrationRoutesRequireAdmin(t *testing.T) {
 		{"calibre import status", http.MethodGet, "/calibre/import/status"},
 		{"start calibre sync", http.MethodPost, "/calibre/sync"},
 		{"calibre sync status", http.MethodGet, "/calibre/sync/status"},
+		{"calibre audit list", http.MethodGet, "/calibre/audit"},
+		{"calibre audit recheck", http.MethodPost, "/calibre/audit/recheck"},
+		{"calibre audit recheck status", http.MethodGet, "/calibre/audit/recheck/status"},
+		{"calibre audit ignore", http.MethodPost, "/calibre/audit/1/ignore"},
 	}
 	for _, tt := range gated {
 		t.Run(tt.name, func(t *testing.T) {
@@ -108,6 +123,10 @@ func TestIntegrationRoutesAllowAdmin(t *testing.T) {
 		{http.MethodGet, "/calibre/import/status", "status"},
 		{http.MethodPost, "/calibre/sync", "start"},
 		{http.MethodGet, "/calibre/sync/status", "status"},
+		{http.MethodGet, "/calibre/audit", "list"},
+		{http.MethodPost, "/calibre/audit/recheck", "recheck"},
+		{http.MethodGet, "/calibre/audit/recheck/status", "recheck-status"},
+		{http.MethodPost, "/calibre/audit/1/ignore", "ignore"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
