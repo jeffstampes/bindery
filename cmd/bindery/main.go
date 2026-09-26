@@ -759,6 +759,7 @@ func main() {
 	bulkHandler := api.NewBulkHandler(authorRepo, bookRepo, blocklistRepo, sched).
 		WithSeriesRepo(seriesRepo).
 		WithSettingsRepo(settingsRepo).
+		WithAuthoritativeService(authoritativeService).
 		WithLifetimeCtx(appCtx).
 		// Bulk "refresh" reuses the per-author catalogue fetch (metadata only,
 		// never auto-grabs). Resolve the default media type per call so newly

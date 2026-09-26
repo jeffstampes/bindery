@@ -81,6 +81,10 @@ type BulkHandler struct {
 	// autoGrabEnabled's fail open default everywhere else.
 	settings *db.SettingsRepo
 
+	// The same ownership service used by the Wanted list; nil preserves the
+	// pre-authoritative search behavior for callers without this integration.
+	authoritative authoritativeService
+
 	// refreshAuthor re-reads a single author's metadata from the provider (and
 	// resolves the default media type for any newly-discovered books).
 	// Injected via WithRefreshFunc so the bulk "refresh" action reuses exactly
@@ -114,6 +118,12 @@ func (h *BulkHandler) WithSettingsRepo(settings *db.SettingsRepo) *BulkHandler {
 	if settings != nil {
 		h.settings = settings
 	}
+	return h
+}
+
+// WithAuthoritativeService shares the Wanted-list ownership filter with author search.
+func (h *BulkHandler) WithAuthoritativeService(a authoritativeService) *BulkHandler {
+	h.authoritative = a
 	return h
 }
 
@@ -388,6 +398,9 @@ func (h *BulkHandler) AuthorsBulk(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(searchTargets) > 0 && h.searcher != nil {
+		if h.authoritative != nil {
+			searchTargets = h.authoritative.FilterWantedBooks(r.Context(), searchTargets)
+		}
 		h.fanOutSearches(searchTargets)
 	}
 	if len(refreshTargets) > 0 && h.refreshAuthor != nil {

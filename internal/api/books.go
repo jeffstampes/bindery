@@ -27,6 +27,7 @@ type authoritativeService interface {
 	IsEnabled(ctx context.Context) bool
 	IsOwned(ctx context.Context, book *models.Book) bool
 	FilterWantedBooks(ctx context.Context, books []models.Book) []models.Book
+	ApplyEffectiveStatuses(ctx context.Context, books []models.Book)
 }
 
 type BookHandler struct {
@@ -324,6 +325,11 @@ func (h *BookHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	if books == nil {
 		books = []models.Book{}
+	}
+	// Only author-scoped lists feed author-detail counts and filters. Annotate
+	// the response page (not the stored rows) with bulk-resolved ownership.
+	if authorID != "" && h.authoritative != nil {
+		h.authoritative.ApplyEffectiveStatuses(r.Context(), books)
 	}
 	for i := range books {
 		cleanBookDescription(&books[i])

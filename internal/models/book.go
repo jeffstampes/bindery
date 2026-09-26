@@ -80,6 +80,12 @@ type Book struct {
 	// every author is monitored.
 	AuthorUnmonitored bool `json:"authorUnmonitored,omitempty"`
 
+	// EffectiveStatus and its per-format counterparts are response-only
+	// projections for author lists; authoritative matches never rewrite Status.
+	EffectiveStatus          string `json:"effectiveStatus,omitempty"`
+	EffectiveEbookStatus     string `json:"effectiveEbookStatus,omitempty"`
+	EffectiveAudiobookStatus string `json:"effectiveAudiobookStatus,omitempty"`
+
 	// EbookFilePath and AudiobookFilePath are computed views over the book_files
 	// table (first path per format), kept for API backwards compatibility.
 	// Do not write to them directly; use BookRepo.AddBookFile instead.

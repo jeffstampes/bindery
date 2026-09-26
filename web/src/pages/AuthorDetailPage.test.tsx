@@ -262,6 +262,71 @@ describe('AuthorDetailPage', () => {
     }
   })
 
+  it('uses effective authoritative ownership for counts, badges, filters, and Search wanted', async () => {
+    renderAuthorDetailPage([
+      makeBook({ id: 10, title: 'Calibre ebook', status: 'wanted', effectiveStatus: 'imported' }),
+      makeBook({ id: 11, title: 'Missing ebook', status: 'wanted' }),
+      makeBook({ id: 12, title: 'Calibre ebook needs audio', status: 'wanted', mediaType: 'both' }),
+      makeBook({ id: 13, title: 'Both formats owned', status: 'wanted', mediaType: 'both', effectiveStatus: 'imported', audiobookFilePath: '/audio/book.m4b' }),
+      makeBook({ id: 14, title: 'Unmonitored book', status: 'wanted', monitored: false }),
+    ], 'table')
+
+    await screen.findByText('Calibre ebook')
+    const stats = screen.getByTestId('author-stats')
+    expect(stats).toHaveTextContent('Books5')
+    expect(stats).toHaveTextContent('In library2')
+    expect(stats).toHaveTextContent('Wanted2')
+    expect(within(rowForTitle('Calibre ebook')).getAllByText('Imported')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: 'Search 2 wanted' })).toBeEnabled()
+
+    fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'wanted' } })
+    expect(screen.queryByText('Calibre ebook')).not.toBeInTheDocument()
+    expect(screen.getByText('Missing ebook')).toBeInTheDocument()
+    expect(screen.getByText('Calibre ebook needs audio')).toBeInTheDocument()
+    expect(screen.queryByText('Unmonitored book')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search 2 wanted' }))
+    await waitFor(() => expect(api.searchAuthorWanted).toHaveBeenCalledWith(42))
+  })
+
+  it('filters a dual-format Calibre ebook as imported while its missing audiobook and aggregate remain wanted', async () => {
+    renderAuthorDetailPage([
+      makeBook({
+        id: 20, title: 'Partial Calibre ownership', status: 'wanted', mediaType: 'both',
+        ebookFilePath: '', audiobookFilePath: '',
+        effectiveEbookStatus: 'imported', effectiveAudiobookStatus: 'wanted',
+      }),
+    ], 'table')
+
+    await screen.findByText('Partial Calibre ownership')
+    expect(screen.getByTestId('author-stats')).toHaveTextContent('Wanted1')
+    expect(screen.getByTestId('author-stats')).toHaveTextContent('In library0')
+    const type = screen.getByLabelText('Type')
+    const status = screen.getByLabelText('Status')
+    fireEvent.change(status, { target: { value: 'wanted' } })
+    expect(screen.getByText('Partial Calibre ownership')).toBeInTheDocument()
+
+    fireEvent.change(type, { target: { value: 'ebook' } })
+    expect(screen.queryByText('Partial Calibre ownership')).not.toBeInTheDocument()
+    fireEvent.change(status, { target: { value: 'imported' } })
+    expect(screen.getByText('Partial Calibre ownership')).toBeInTheDocument()
+
+    fireEvent.change(type, { target: { value: 'audiobook' } })
+    expect(screen.queryByText('Partial Calibre ownership')).not.toBeInTheDocument()
+    fireEvent.change(status, { target: { value: 'wanted' } })
+    expect(screen.getByText('Partial Calibre ownership')).toBeInTheDocument()
+  })
+
+  it('does not call author search when all persisted wanted books are authoritative-owned', async () => {
+    renderAuthorDetailPage([
+      makeBook({ id: 10, title: 'Owned ebook', status: 'wanted', effectiveStatus: 'imported' }),
+    ])
+    const button = await screen.findByRole('button', { name: 'Search 0 wanted' })
+    expect(button).toBeDisabled()
+    fireEvent.click(button)
+    expect(api.searchAuthorWanted).not.toHaveBeenCalled()
+  })
+
   it('searches all wanted books for the current author', async () => {
     renderAuthorDetailPage([
       makeBook({ id: 10, title: 'Wanted Book', status: 'wanted' }),

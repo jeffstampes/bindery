@@ -143,6 +143,22 @@ backend metadata audit. It creates no Calibre-backed catalogue book. The
 review UI never edits curated metadata; optional #8 tag management is the
 sole sanctioned write-back exception.
 
+### Author detail and Search wanted (#18)
+
+Author-scoped book-list responses expose aggregate `effectiveStatus` when all
+requested formats are satisfied and, for non-skipped dual-format works,
+`effectiveEbookStatus` / `effectiveAudiobookStatus` when authoritative mode is
+on; stored `books.status` stays unchanged. The author page uses the aggregate
+status for its In library/Wanted counts, badges, and Search wanted count, and
+the per-format status for filtered views. A Calibre match satisfies an ebook,
+not an audiobook: a dual-format work may be imported in the ebook view and
+wanted in the audiobook and aggregate views until audio is also present.
+Legacy untyped `filePath` still satisfies only a single-format work.
+The author bulk-search endpoint independently applies the same batched
+`FilterWantedBooks` ownership check before dispatch, even if a client posts a
+search without using the UI. With the opt-in off, no effective statuses are
+projected and searches keep their previous behavior.
+
 ### Backend metadata audit (#6)
 
 `AuthoritativeService.Reconcile` reuses its single read-only Calibre snapshot

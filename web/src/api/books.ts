@@ -38,6 +38,11 @@ export interface Book {
   genres: string[]
   monitored: boolean
   status: string
+  // Author-scoped lists project aggregate and (for dual-format books) per-format
+  // ownership without changing the persisted status. Absent when mode is off.
+  effectiveStatus?: string
+  effectiveEbookStatus?: string
+  effectiveAudiobookStatus?: string
   filePath: string
   mediaType: MediaType
   // Per-format file paths for dual-format books (mediaType='both').
