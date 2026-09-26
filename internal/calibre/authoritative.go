@@ -95,17 +95,33 @@ func (s *AuthoritativeService) IsOwnedForFormat(ctx context.Context, book *model
 			return false
 		}
 		ref, err := s.crossRef.GetByBookID(ctx, book.ID)
-		if err != nil || ref == nil {
-			return false
-		}
-		return ref.Status == models.CalibreMatchStatusMatched
+		return err == nil && ref != nil && ownedForFormat(book, format, ref.Status == models.CalibreMatchStatusMatched)
+	default:
+		return ownedForFormat(book, format, false)
+	}
+}
 
+// ownedForFormat is shared by single-book checks and bulk projections. A match
+// satisfies only ebooks; an untyped legacy path cannot satisfy either half of
+// a dual-format book on its own.
+func ownedForFormat(book *models.Book, format string, matched bool) bool {
+	switch format {
+	case models.MediaTypeEbook:
+		return book.EbookFilePath != "" || (book.MediaType == models.MediaTypeEbook && book.FilePath != "") || matched
 	case models.MediaTypeAudiobook:
 		return book.AudiobookFilePath != "" || (book.MediaType == models.MediaTypeAudiobook && book.FilePath != "")
-
 	default:
 		return book.HasFileForCurrentFormat()
 	}
+}
+
+func ownedWithMatch(book *models.Book, matched bool) bool {
+	wantsEbook, wantsAudiobook := book.WantsEbook(), book.WantsAudiobook()
+	if !wantsEbook && !wantsAudiobook {
+		return book.HasFileForCurrentFormat()
+	}
+	return (!wantsEbook || ownedForFormat(book, models.MediaTypeEbook, matched)) &&
+		(!wantsAudiobook || ownedForFormat(book, models.MediaTypeAudiobook, false))
 }
 
 // IsOwned reports whether all monitored formats for a Bindery work are satisfied/owned.
@@ -164,31 +180,46 @@ func (s *AuthoritativeService) FilterWantedBooks(ctx context.Context, books []mo
 
 	out := make([]models.Book, 0, len(books))
 	for _, b := range books {
-		wantsEbook := b.WantsEbook()
-		wantsAudiobook := b.WantsAudiobook()
-
-		ebookSatisfied := !wantsEbook
-		if wantsEbook {
-			if b.EbookFilePath != "" || (b.MediaType == models.MediaTypeEbook && b.FilePath != "") {
-				ebookSatisfied = true
-			} else if ref, ok := matchedMap[b.ID]; ok && ref.Status == models.CalibreMatchStatusMatched {
-				ebookSatisfied = true
-			}
-		}
-
-		audiobookSatisfied := !wantsAudiobook
-		if wantsAudiobook {
-			if b.AudiobookFilePath != "" || (b.MediaType == models.MediaTypeAudiobook && b.FilePath != "") {
-				audiobookSatisfied = true
-			}
-		}
-
-		if ebookSatisfied && audiobookSatisfied {
+		if ownedWithMatch(&b, matchedMap[b.ID].Status == models.CalibreMatchStatusMatched) {
 			continue // Suppress acquisition: work is fully satisfied
 		}
 		out = append(out, b)
 	}
 	return out
+}
+
+// ApplyEffectiveStatuses annotates author-list response books without changing
+// persisted status. A single bulk reference read serves the whole page; callers
+// use EffectiveStatus for one book and FilterWantedBooks for acquisition lists.
+func (s *AuthoritativeService) ApplyEffectiveStatuses(ctx context.Context, books []models.Book) {
+	if len(books) == 0 || !s.IsEnabled(ctx) || s.crossRef == nil {
+		return
+	}
+	matchedMap, err := s.crossRef.GetMatchedMap(ctx)
+	if err != nil {
+		slog.Warn("authoritative mode: failed to query matched map", "error", err)
+		return
+	}
+	for i := range books {
+		b := &books[i]
+		matched := matchedMap[b.ID].Status == models.CalibreMatchStatusMatched
+		if b.MediaType == models.MediaTypeBoth && b.Status != models.BookStatusSkipped {
+			// Format-filtered author views must not infer ebook ownership from
+			// file paths: a Calibre match can satisfy ebook with no local file,
+			// while the aggregate remains wanted for its missing audiobook.
+			b.EffectiveEbookStatus = b.Status
+			b.EffectiveAudiobookStatus = b.Status
+			if ownedForFormat(b, models.MediaTypeEbook, matched) {
+				b.EffectiveEbookStatus = models.BookStatusImported
+			}
+			if ownedForFormat(b, models.MediaTypeAudiobook, false) {
+				b.EffectiveAudiobookStatus = models.BookStatusImported
+			}
+		}
+		if b.Status != models.BookStatusSkipped && ownedWithMatch(b, matched) {
+			b.EffectiveStatus = models.BookStatusImported
+		}
+	}
 }
 
 // ReconcileResult captures summary statistics of an authoritative reconciliation pass.

@@ -57,6 +57,9 @@ function fmtPublishedYear(d?: string): string {
   return d.slice(0, 4)
 }
 
+function effectiveStatus(book: Book): string {
+  return book.effectiveStatus || book.status
+}
 
 function mediaLabel(mediaType?: Book['mediaType']): string {
   if (mediaType === 'audiobook') return '🎧 Audiobook'
@@ -347,7 +350,7 @@ export default function AuthorDetailPage() {
 
   const handleSearchWanted = async () => {
     if (!author) return
-    const searchableWantedCount = books.filter(b => b.status === 'wanted' && b.monitored && !b.excluded).length
+    const searchableWantedCount = books.filter(b => effectiveStatus(b) === 'wanted' && b.monitored && !b.excluded).length
     if (searchableWantedCount === 0) return
     setSearchingWanted(true)
     setError(null)
@@ -497,17 +500,16 @@ export default function AuthorDetailPage() {
       })
     }
     if (statusFilter) {
-      // For a 'both' book under an active type filter, judge the selected
-      // format rather than the aggregate status: the aggregate stays 'wanted'
-      // until BOTH formats are on disk, which hid a book whose ebook was
-      // already imported from Type: Ebook + Status: Imported (#1406). The
-      // per-format file path is the format-scoped truth for 'imported'; when
-      // the selected format has no file yet, the aggregate still supplies
-      // 'wanted' and the in-flight states (which have no per-format field).
+      // A dual-format book stays aggregate 'wanted' until both formats are
+      // satisfied. Author-scoped responses project each format's effective
+      // status (including Calibre ownership); absent in legacy/off-mode
+      // responses, fall back to the existing per-format file-path behavior.
       const statusOf = (b: Book): string => {
-        if (!typeFilter || (b.mediaType || 'ebook') !== 'both') return b.status
+        if (!typeFilter || (b.mediaType || 'ebook') !== 'both') return effectiveStatus(b)
+        const projected = typeFilter === 'ebook' ? b.effectiveEbookStatus : b.effectiveAudiobookStatus
+        if (projected) return projected
         const path = typeFilter === 'ebook' ? b.ebookFilePath : b.audiobookFilePath
-        return path ? 'imported' : b.status
+        return path ? 'imported' : effectiveStatus(b)
       }
       // "Wanted" means genuinely wanted: monitored AND status=wanted. An
       // unmonitored book can carry a stale `wanted` status (#1173) but is not
@@ -593,7 +595,7 @@ export default function AuthorDetailPage() {
   if (loading) return <div className="text-slate-600 dark:text-zinc-500">Loading…</div>
   if (!author) return <div className="text-slate-600 dark:text-zinc-500">Author not found</div>
 
-  const searchableWantedCount = books.filter(b => b.status === 'wanted' && b.monitored && !b.excluded).length
+  const searchableWantedCount = books.filter(b => effectiveStatus(b) === 'wanted' && b.monitored && !b.excluded).length
   // Relinking is valid for every author — the backend accepts any record and the
   // candidate search deliberately does not merge same-person records — so the
   // action is always offered. The record's fullness only picks the wording below.
@@ -603,7 +605,7 @@ export default function AuthorDetailPage() {
     : t('authorMetadataLink.actionFindBetter', 'Find better metadata')
   const counts = {
     total: books.length,
-    imported: books.filter(b => b.status === 'imported').length,
+    imported: books.filter(b => effectiveStatus(b) === 'imported').length,
     wanted: searchableWantedCount,
     audiobook: books.filter(b => b.mediaType === 'audiobook').length,
   }
@@ -669,7 +671,7 @@ export default function AuthorDetailPage() {
               <span className="block text-slate-800 dark:text-zinc-200 truncate">{book.title}</span>
               <span className="mt-1 flex flex-wrap items-center gap-1 sm:hidden">
                 {(() => {
-                  const badge = bookStatusBadge(book.status, book.monitored, t)
+                  const badge = bookStatusBadge(effectiveStatus(book), book.monitored, t)
                   return (
                     <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${badge.colorClass}`}>
                       {badge.label}
@@ -697,7 +699,7 @@ export default function AuthorDetailPage() {
         </td>
         <td className="hidden sm:table-cell px-3 py-2 whitespace-nowrap align-middle">
           {(() => {
-            const badge = bookStatusBadge(book.status, book.monitored, t)
+            const badge = bookStatusBadge(effectiveStatus(book), book.monitored, t)
             return (
               <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-medium ${badge.colorClass}`}>
                 {badge.label}
@@ -787,7 +789,7 @@ export default function AuthorDetailPage() {
                   translated status label is the case that overflows. */}
               <div className="flex items-center gap-1 mt-1 flex-nowrap overflow-hidden">
                 {(() => {
-                  const badge = bookStatusBadge(book.status, book.monitored, t)
+                  const badge = bookStatusBadge(effectiveStatus(book), book.monitored, t)
                   return (
                     <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium ${badge.colorClass}`}>
                       {badge.label}
