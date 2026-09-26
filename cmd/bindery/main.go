@@ -540,8 +540,10 @@ func main() {
 	}
 
 	calibreAuditRepo := db.NewCalibreAuditRepo(database)
+	calibreIdentityRepo := db.NewCalibreIdentityRepo(database)
 	authoritativeService := calibre.NewAuthoritativeService(settingsRepo, calibreCrossRefRepo, bookRepo).
-		WithEditions(editionRepo).WithAudit(calibreAuditRepo)
+		WithEditions(editionRepo).WithAudit(calibreAuditRepo).
+		WithIdentityEvidence(calibreIdentityRepo, metaAgg)
 	calibreImporter.WithAuthoritativeService(authoritativeService)
 
 	if authoritativeService.IsEnabled(ctxBoot) {
@@ -554,6 +556,22 @@ func main() {
 			}
 		})
 	}
+	// Advance the bounded identity backlog without repeatedly running the
+	// full audit. The pass itself is a no-op when authoritative mode is off.
+	bgJobs.Go("calibre-identity-evidence-refresh", func(ctx context.Context) {
+		ticker := time.NewTicker(15 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := authoritativeService.RefreshIdentity(ctx); err != nil && ctx.Err() == nil {
+					slog.Warn("calibre identity evidence refresh failed", "error", err)
+				}
+			}
+		}
+	})
 
 	// Scheduler
 	sched := scheduler.New(appCtx, importScanner, idxSearcher, metaAgg,

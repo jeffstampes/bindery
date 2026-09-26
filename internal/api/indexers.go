@@ -500,6 +500,15 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "book not found"})
 		return
 	}
+	// A format-scoped manual search lets a dual-format work whose ebook is
+	// already owned in Calibre search only for its still-missing audiobook.
+	requestedFormat := r.URL.Query().Get("mediaType")
+	if requestedFormat != "" &&
+		(requestedFormat != models.MediaTypeEbook && requestedFormat != models.MediaTypeAudiobook ||
+			book.MediaType != models.MediaTypeBoth && requestedFormat != book.MediaType) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid search mediaType"})
+		return
+	}
 
 	idxs, err := h.indexers.List(r.Context())
 	if err != nil {
@@ -533,6 +542,9 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 		AllowedLanguages: allowedLangs,
 		AuthorAliases:    authorAliases,
 	}
+	if requestedFormat != "" {
+		crit.MediaType = requestedFormat
+	}
 	if book.ReleaseDate != nil {
 		crit.Year = book.ReleaseDate.Year()
 	}
@@ -550,7 +562,7 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 	// filterCategoriesForMedia, silently dropping all audiobook results.
 	var results []newznab.SearchResult
 	var dbg *indexer.SearchDebug
-	if book.MediaType == models.MediaTypeBoth {
+	if book.MediaType == models.MediaTypeBoth && requestedFormat == "" {
 		ebookCrit := crit
 		ebookCrit.MediaType = models.MediaTypeEbook
 		audioCrit := crit
@@ -606,6 +618,11 @@ func (h *IndexerHandler) SearchBook(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		results, dbg = h.searcher.SearchBookWithDebug(r.Context(), idxs, crit)
+		if requestedFormat != "" {
+			for i := range results {
+				results[i].MediaType = requestedFormat
+			}
+		}
 	}
 
 	// Build decision specs.

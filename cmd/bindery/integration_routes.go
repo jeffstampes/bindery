@@ -103,6 +103,7 @@ type calibreAuditRouteHandler interface {
 	Recheck(http.ResponseWriter, *http.Request)
 	RecheckStatus(http.ResponseWriter, *http.Request)
 	Ignore(http.ResponseWriter, *http.Request)
+	Identity(http.ResponseWriter, *http.Request)
 }
 
 // Audit review is admin-only; the handler additionally refuses disabled mode.
@@ -113,5 +114,6 @@ func registerCalibreAuditRoutes(r chi.Router, h calibreAuditRouteHandler) {
 		r.Post("/calibre/audit/recheck", h.Recheck)
 		r.Get("/calibre/audit/recheck/status", h.RecheckStatus)
 		r.Post("/calibre/audit/{id}/ignore", h.Ignore)
+		r.Get("/calibre/identity/{bookID}", h.Identity)
 	})
 }

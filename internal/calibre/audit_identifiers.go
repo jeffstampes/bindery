@@ -83,8 +83,30 @@ func auditIdentifier(typ, value string) string {
 	}
 }
 
-func (c *auditComparator) compareIdentifiers(calibreIDs auditIdentifiers) {
+func (c *auditComparator) compareIdentifiers(calibreIDs auditIdentifiers, identity models.CalibreIdentitySnapshot) {
 	providerIDs := externalAuditIdentifiers(c.book)
+	if identity.BookID == c.book.ID && identity.CalibreID == c.calibre.CalibreID &&
+		identity.RootKey == identityRootKey(c.book) {
+		for _, e := range identity.Evidence {
+			if e.Status != models.CalibreIdentityRoot && e.Status != models.CalibreIdentityCorroborated {
+				continue // Search candidates, conflicts and CWA claims are not evidence.
+			}
+			for typ, values := range e.NormalizedIdentifiers {
+				if (typ == "isbn" || typ == "asin" || typ == "openlibrary_edition") &&
+					(e.EditionID == "" || e.ProviderMetadata["ebook"] != true) {
+					continue // a work/print ISBN does not identify the owned ebook edition
+				}
+				for _, value := range values {
+					if value != "" {
+						providerIDs[typ] = append(providerIDs[typ], models.CalibreAuditEvidence{
+							Value: value, Source: "calibre_identity_evidence." + e.Method,
+							Provider: e.Provider, ForeignID: e.ForeignID, RecordID: e.BookID,
+						})
+					}
+				}
+			}
+		}
+	}
 	for typ, external := range providerIDs {
 		canonical := func(s string) string { return auditIdentifier(typ, s) }
 		if len(auditNormalized(external, canonical)) == 0 {

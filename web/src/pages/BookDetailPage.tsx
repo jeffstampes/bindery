@@ -445,7 +445,7 @@ function BookDetailPageInner() {
     setError(null)
     try {
       const [r, indexers] = await Promise.all([
-        api.searchBook(book.id),
+        searchAudioOnly ? api.searchBook(book.id, 'audiobook') : api.searchBook(book.id),
         api.listIndexers(),
       ])
       setHasIndexers(indexers.length > 0)
@@ -471,7 +471,7 @@ function BookDetailPageInner() {
         bookId: book.id,
         indexerId: r.indexerId,
         protocol: r.protocol,
-        mediaType: book.mediaType,
+        mediaType: r.mediaType || book.mediaType,
       })
       // Refresh book + history
       const [b, h] = await Promise.all([
@@ -720,6 +720,8 @@ function BookDetailPageInner() {
     (mt === 'both' && book.effectiveEbookStatus === 'imported')
   ) && !book.ebookFilePath && !(mt === 'ebook' && book.filePath) &&
     !book.bookFiles?.some(f => f.format === 'ebook')
+  const searchAudioOnly = mt === 'both' && calibreEbookOwned
+  const showSearch = !calibreEbookOwned || (searchAudioOnly && book.effectiveAudiobookStatus !== 'imported')
   const groups = groupRowsByFormat(rows, mt, calibreEbookOwned)
   const hasAnyFile = rows.length > 0
 
@@ -730,7 +732,7 @@ function BookDetailPageInner() {
 
   const searchLabel = searching
     ? t('bookDetail.searching')
-    : mt === 'audiobook'
+    : mt === 'audiobook' || searchAudioOnly
       ? t('bookDetail.searchAudiobookIndexers')
       : mt === 'both'
         ? t('bookDetail.searchBothIndexers')
@@ -919,13 +921,15 @@ function BookDetailPageInner() {
               <option value="audiobook">🎧 {t('common.audiobook')}</option>
               <option value="both">📖🎧 {t('common.both')}</option>
             </select>
-            <button
-              onClick={runSearch}
-              disabled={searching}
-              className={`${btn.primary} ${btnSize.md}`}
-            >
-              <span aria-hidden>🔍</span> {searchLabel}
-            </button>
+            {showSearch && (
+              <button
+                onClick={runSearch}
+                disabled={searching}
+                className={`${btn.primary} ${btnSize.md}`}
+              >
+                <span aria-hidden>🔍</span> {searchLabel}
+              </button>
+            )}
           </div>
         </div>
       </div>

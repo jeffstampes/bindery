@@ -170,6 +170,51 @@ state. File paths, `bookFiles`, and persisted `status` are never synthesized or
 updated by this projection. When the opt-in is off the detail response and
 presentation retain their existing stored-status behavior.
 
+### Bindery-rooted identity evidence (#21)
+
+Ownership and bibliographic identity are deliberately asymmetric. The existing
+confident work ↔ Calibre cross-reference answers **whether the ebook is owned**;
+`books.foreign_id` and its configured metadata provider answer **which work**
+Bindery means. Every identifier and metadata field on the owned Calibre/CWA
+record is a claim to compare *after* resolving the Bindery work. A set of ISBN,
+OpenLibrary, Google and Hardcover IDs copied from one erroneous CWA selection
+is one correlated source, never several independent votes. No CWA identifier
+seeds cross-provider discovery or replaces the canonical foreign ID.
+
+The discovery pass resolves the canonical work through its named provider,
+then follows provider-supplied, checksum-valid edition/work ISBNs to the other
+configured metadata providers; title/author search is a weaker, bounded
+candidate-finding fallback. Raw provider observations stay separate from
+interactive search's deduplicated winner, with each lookup's method, seed,
+provider, outcome and last-check time. An empty result differs from a failed,
+truncated or unconfigured lookup. Candidates remain candidates; neither a
+search hit nor a matching CWA claim silently becomes a `book_identifiers` alias.
+Confidence groups by independent provider record rather than by the number of
+identifiers on that record. Work confidence never implies that the physical
+owned file is a particular edition; publication-date comparisons remain
+edition-scoped and conservative.
+
+Bindery stores the resulting provider evidence, lookups and *identifier claims*
+under the matched work and Calibre ID in dedicated `calibre_identity_*` tables
+(migration 092), not in `books`, Calibre's `metadata.db`, or the ownership
+cross-reference's match details. This is a refreshable advisory snapshot, not
+another catalogue or a proposed correction queue. Reconcile and audit revalidate
+stale evidence and recompare current CWA claims; a partial lookup remains visible
+for retry rather than becoming negative evidence. Discovery uses at most four
+work calls at a time (and four provider calls per work); each pass attempts at
+most 256 stale works in a two-minute window. A fifteen-minute background tick
+advances the backlog without rerunning the entire audit. Successful snapshots
+expire after seven days; a failed or incomplete lookup is retried after six
+hours. The admin-only `GET /api/v1/calibre/identity/{bookID}` exposes the
+latest work, edition, lookup and claim statuses. The pass is opt-in with
+authoritative mode; normal book-add and non-authoritative search paths are
+unchanged. No CWA metadata correction, mismatch-tag write-back change, or
+file-content inspection is part of identity discovery.
+
+On Book Detail, an ebook already satisfied by Calibre/CWA no longer offers an
+ebook indexer search. A dual-format work can still search for its missing
+audiobook alone, without searching ebook categories again.
+
 ### Backend metadata audit (#6)
 
 `AuthoritativeService.Reconcile` reuses its single read-only Calibre snapshot

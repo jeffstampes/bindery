@@ -64,6 +64,37 @@ func (h *CalibreAuditHandler) available(w http.ResponseWriter, r *http.Request) 
 	return true
 }
 
+// Identity returns the latest rooted discovery snapshot for a currently
+// matched work. It is admin-only at the router; CWA claims in the response are
+// comparisons, never evidence used to select a canonical work or edition.
+func (h *CalibreAuditHandler) Identity(w http.ResponseWriter, r *http.Request) {
+	if !h.available(w, r) {
+		return
+	}
+	bookID, err := strconv.ParseInt(chi.URLParam(r, "bookID"), 10, 64)
+	if err != nil || bookID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid book id"})
+		return
+	}
+	reader, ok := h.service.(interface {
+		IdentitySnapshot(context.Context, int64) (*models.CalibreIdentitySnapshot, error)
+	})
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "identity evidence unavailable"})
+		return
+	}
+	snapshot, err := reader.IdentitySnapshot(r.Context(), bookID)
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if snapshot == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "identity evidence unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
 // List returns a filtered, bounded page of findings and the matching count.
 func (h *CalibreAuditHandler) List(w http.ResponseWriter, r *http.Request) {
 	if !h.available(w, r) {
