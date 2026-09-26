@@ -43,6 +43,7 @@ const ImportPage = lazy(() => import('./pages/import/ImportPage'))
 const SettingsPage = lazy(() => import('./pages/SettingsPage'))
 const UsersPage = lazy(() => import('./pages/UsersPage'))
 const HistoryPage = lazy(() => import('./pages/HistoryPage'))
+const CalibreAuditPage = lazy(() => import('./pages/CalibreAuditPage'))
 const SeriesPage = lazy(() => import('./pages/SeriesPage'))
 const CalendarPage = lazy(() => import('./pages/CalendarPage'))
 const DiscoverPage = lazy(() => import('./pages/DiscoverPage'))
@@ -125,12 +126,24 @@ function Shell() {
   const [version, setVersion] = useState('')
   const [latestVersion, setLatestVersion] = useState<string | undefined>(undefined)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [auditEnabled, setAuditEnabled] = useState(false)
   const { status, logout, isAdmin, isRequester } = useAuth()
   const signedIn = !!status?.authenticated && status.mode !== 'disabled'
   // Books the library scan could not match, on the Import nav entry (admins
   // only; the count comes from an admin only route).
   const unmatched = useUnmatchedCount(isAdmin)
-  const navEntries = navGroupsFor(isAdmin, isRequester)
+  const navEntries = navGroupsFor(isAdmin, isRequester, auditEnabled)
+  useEffect(() => {
+    if (!isAdmin) return
+    let active = true
+    const load = () => api.listSettings().then(settings => {
+      const values = Object.fromEntries(settings.map(s => [s.key, s.value]))
+      if (active) setAuditEnabled(values['calibre.authoritative_library_enabled'] === 'true' && !!values['calibre.library_path']?.trim())
+    }).catch(() => { if (active) setAuditEnabled(false) })
+    load()
+    window.addEventListener('calibre-audit-availability-change', load)
+    return () => { active = false; window.removeEventListener('calibre-audit-availability-change', load) }
+  }, [isAdmin])
   const pendingRequests = usePendingRequestCount(isAdmin)
   const { pathname } = useLocation()
   // The group whose tab strip belongs above the current page, if any.
@@ -378,6 +391,7 @@ function Shell() {
             <Route path="/queue" element={<QueuePage />} />
             <Route path="/import" element={<ImportPage />} />
             <Route path="/history" element={<HistoryPage />} />
+            {isAdmin && auditEnabled && <Route path="/calibre/audit" element={<CalibreAuditPage />} />}
             <Route path="/series" element={<SeriesPage />} />
             <Route path="/calendar" element={<CalendarPage />} />
             <Route path="/discover" element={<DiscoverPage />} />

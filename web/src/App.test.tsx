@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, within } from '@testing-library/react'
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react'
 import App from './App'
 import { api } from './api/client'
 
@@ -25,6 +25,7 @@ vi.mock('./pages/BooksPage', () => ({ default: () => <div data-testid="page-book
 vi.mock('./pages/WantedPage', () => ({ default: () => <div data-testid="page-wanted" /> }))
 vi.mock('./pages/QueuePage', () => ({ default: () => <div data-testid="page-queue" /> }))
 vi.mock('./pages/HistoryPage', () => ({ default: () => <div data-testid="page-history" /> }))
+vi.mock('./pages/CalibreAuditPage', () => ({ default: () => <div data-testid="page-calibre-audit" /> }))
 vi.mock('./pages/SeriesPage', () => ({ default: () => <div data-testid="page-series" /> }))
 vi.mock('./pages/CalendarPage', () => ({ default: () => <div data-testid="page-calendar" /> }))
 vi.mock('./pages/DiscoverPage', () => ({ default: () => <div data-testid="page-discover" /> }))
@@ -64,6 +65,7 @@ vi.mock('./api/client', () => ({
     // The Import nav badge reads this once for an admin.
     unmatchedSummary: vi.fn().mockResolvedValue({ pending: 0, pendingFiles: 0, ignored: 0, adopted: 0, scan: {} }),
     pendingRequestCount: vi.fn().mockResolvedValue({ count: 3 }),
+    listSettings: vi.fn().mockResolvedValue([]),
   },
 }))
 
@@ -83,7 +85,7 @@ vi.mock('react-i18next', () => ({
         'nav.calendar': 'Calendar', 'nav.discover': 'Discover', 'nav.settings': 'Settings',
         'nav.search': 'Search',
         'nav.requesterLibrary': 'Library', 'nav.request': 'Request', 'nav.myRequests': 'My requests',
-        'nav.requests': 'Requests', 'nav.users': 'Users',
+        'nav.requests': 'Requests', 'nav.users': 'Users', 'nav.calibreAudit': 'Calibre audit',
         'nav.library': 'Library', 'nav.activity': 'Activity',
         'login.signOut': 'Sign out', 'login.signedInAs': 'Signed in as',
       }
@@ -110,6 +112,35 @@ beforeEach(() => {
     isAdmin: false,
   }
   window.history.pushState(null, '', '/')
+})
+
+describe('Calibre audit availability', () => {
+  beforeEach(() => {
+    authState.value = {
+      status: { authenticated: true, setupRequired: false, mode: 'enabled' },
+      logout: logoutMock, isAdmin: true,
+    }
+  })
+
+  it('does not expose a review route or nav tab while authoritative mode is off', async () => {
+    window.history.pushState(null, '', '/calibre/audit')
+    renderShell()
+    expect(await screen.findByText('Page not found')).toBeInTheDocument()
+    expect(screen.queryByTestId('page-calibre-audit')).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Calibre audit' })).not.toBeInTheDocument()
+  })
+
+  it('exposes review to admins only with the setting and library path', async () => {
+    vi.mocked(api.listSettings).mockResolvedValueOnce([
+      { key: 'calibre.authoritative_library_enabled', value: 'true' },
+      { key: 'calibre.library_path', value: '/library' },
+    ])
+    window.history.pushState(null, '', '/calibre/audit')
+    renderShell()
+    expect(await screen.findByTestId('page-calibre-audit')).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: 'Calibre audit' }).length).toBeGreaterThan(0)
+    await waitFor(() => expect(api.listSettings).toHaveBeenCalled())
+  })
 })
 
 describe('App auth routes', () => {

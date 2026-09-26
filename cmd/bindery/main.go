@@ -539,8 +539,9 @@ func main() {
 		}
 	}
 
+	calibreAuditRepo := db.NewCalibreAuditRepo(database)
 	authoritativeService := calibre.NewAuthoritativeService(settingsRepo, calibreCrossRefRepo, bookRepo).
-		WithEditions(editionRepo).WithAudit(db.NewCalibreAuditRepo(database))
+		WithEditions(editionRepo).WithAudit(calibreAuditRepo)
 	calibreImporter.WithAuthoritativeService(authoritativeService)
 
 	if authoritativeService.IsEnabled(ctxBoot) {
@@ -800,6 +801,7 @@ func main() {
 		return api.LoadCalibreConfig(appCtx, settingsRepo)
 	})
 	calibreRunsHandler := api.NewCalibreRunsHandler(calibreImporter)
+	calibreAuditHandler := api.NewCalibreAuditHandler(authoritativeService, calibreAuditRepo).WithJobs(bgJobs)
 	calibreSyncer := calibre.NewSyncer(bookRepo).
 		WithMetadata(authorRepo, editionRepo).
 		WithSeries(seriesRepo)
@@ -1209,6 +1211,7 @@ func main() {
 		// Calibre integration (probe + library import + bulk push) — all
 		// admin-only. See registerCalibreIntegrationRoutes.
 		registerCalibreIntegrationRoutes(r, calibreHandler, calibreImportHandler, calibreSyncHandler)
+		registerCalibreAuditRoutes(r, calibreAuditHandler)
 
 		// Calibre import run history + rollback (#643). Admin-only — a bad
 		// rollback can delete authors/books wholesale, so the destructive

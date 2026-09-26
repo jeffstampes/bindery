@@ -448,6 +448,7 @@ var webSettingKeys = []string{
 	"calibre.push_path_remap",
 	"calibre.sync_on_startup",
 	"cwa.ingest_path",
+	"cwa.web_url",
 	"default.media_type",
 	"default.media_type_strict",
 	"googlebooks.apiKey",

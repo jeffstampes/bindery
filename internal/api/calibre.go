@@ -55,6 +55,9 @@ const (
 // CWA reference: https://github.com/crocodilestick/Calibre-Web-Automated
 const SettingCWAIngestPath = "cwa.ingest_path"
 
+// SettingCWAWebURL is an optional browser-facing base URL for review links.
+const SettingCWAWebURL = "cwa.web_url"
+
 // CalibreHandler exposes the "test connection" endpoint for the Calibre
 // settings UI. Read/write of the calibre.* keys themselves go through the
 // generic /setting endpoints so the UI can reuse its existing plumbing;

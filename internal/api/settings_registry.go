@@ -276,6 +276,12 @@ var settingDescriptors = []SettingDescriptor{
 		State:       SettingStateActive,
 	},
 
+	{
+		Key: SettingCWAWebURL, Type: SettingTypeString, Default: "",
+		Description: "Optional browser-facing Calibre-Web-Automated base URL for links from advisory audit findings. Empty hides the link.",
+		State:       SettingStateActive,
+	},
+
 	// Calibre.
 	{
 		Key: SettingCalibreMode, Type: SettingTypeEnum, Default: "off",
@@ -326,7 +332,7 @@ var settingDescriptors = []SettingDescriptor{
 	},
 	{
 		Key: SettingCalibreAuthoritativeLibraryEnabled, Type: SettingTypeBool, Default: "false",
-		Description: "Record operator intent for Calibre/CWA to be authoritative for books it holds (designed to read metadata.db read-only; live reading and matching arrive in later slices and enabling this setting does not yet change catalogue behavior). Requires a Calibre library path.",
+		Description: "Opt in to read-only Calibre/CWA ownership reconciliation and advisory metadata audit; requires a Calibre library path.",
 		State:       SettingStateActive,
 	},
 	{

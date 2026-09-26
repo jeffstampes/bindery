@@ -667,6 +667,14 @@ func validateSettingValue(key, value string) error {
 		if !info.IsDir() {
 			return fmt.Errorf("cwa.ingest_path %q is not a directory", value)
 		}
+	case SettingCWAWebURL:
+		if value == "" {
+			return nil
+		}
+		parsed, err := url.Parse(value)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return fmt.Errorf("cwa.web_url must be an absolute http(s) base URL without credentials, query or fragment")
+		}
 	case SettingImportDropFolder:
 		// Empty = feature off. Non-empty must resolve to an existing writable
 		// directory so a typo fails loudly here, not silently at import time.

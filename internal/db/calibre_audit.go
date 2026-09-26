@@ -34,14 +34,77 @@ func (r *CalibreAuditRepo) List(ctx context.Context) ([]models.CalibreAuditFindi
 	}
 	defer rows.Close()
 
-	var findings []models.CalibreAuditFinding
+	return scanCalibreAuditFindings(rows, false)
+}
+
+// CalibreAuditListOpts selects a bounded review page. Empty filters mean all
+// states/types; callers validate the enum values before passing them here.
+type CalibreAuditListOpts struct {
+	State, FindingType, Assessment string
+	Limit, Offset                  int
+}
+
+// ListPage reads only the requested findings, with a stable newest-first order.
+// The audit's unbounded List remains separate for its full-pass lifecycle diff.
+func (r *CalibreAuditRepo) ListPage(ctx context.Context, opts CalibreAuditListOpts) ([]models.CalibreAuditFinding, int, error) {
+	where := []string{}
+	args := []any{}
+	if opts.State != "" {
+		where = append(where, "f.state = ?")
+		args = append(args, opts.State)
+	}
+	if opts.FindingType != "" {
+		where = append(where, "f.finding_type = ?")
+		args = append(args, opts.FindingType)
+	}
+	if opts.Assessment != "" {
+		where = append(where, "f.assessment = ?")
+		args = append(args, opts.Assessment)
+	}
+	filter := ""
+	if len(where) > 0 {
+		filter = " WHERE " + strings.Join(where, " AND ")
+	}
+	var total int
+	// Only fixed SQL fragments are concatenated; every filter value is bound.
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM calibre_metadata_audit_findings f`+filter, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count calibre audit findings: %w", err)
+	}
+	limit := opts.Limit
+	if limit <= 0 || limit > 250 {
+		limit = 50
+	}
+	offset := max(opts.Offset, 0)
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT f.id, f.book_id, f.calibre_id, f.field, f.evidence_key, f.finding_type, f.assessment,
+		       f.calibre_evidence_json, f.bindery_evidence_json, f.match_method,
+		       f.match_confidence, f.reason, f.comparison_fingerprint, f.ignored_fingerprint, f.state,
+		       f.created_at, f.updated_at, b.title
+		FROM calibre_metadata_audit_findings f JOIN books b ON b.id = f.book_id`+filter+`
+		-- For state-filtered queues the existing (state, updated_at DESC) index
+		-- yields equal-timestamp rowids in ascending order without a tie sort.
+		ORDER BY f.updated_at DESC, f.id ASC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("page calibre audit findings: %w", err)
+	}
+	defer rows.Close()
+	findings, err := scanCalibreAuditFindings(rows, true)
+	return findings, total, err
+}
+
+func scanCalibreAuditFindings(rows *sql.Rows, withTitle bool) ([]models.CalibreAuditFinding, error) {
+	findings := make([]models.CalibreAuditFinding, 0)
 	for rows.Next() {
 		var f models.CalibreAuditFinding
 		var calibreJSON, binderyJSON, created, updated string
-		if err := rows.Scan(&f.ID, &f.BookID, &f.CalibreID, &f.Field, &f.EvidenceKey,
+		dest := []any{&f.ID, &f.BookID, &f.CalibreID, &f.Field, &f.EvidenceKey,
 			&f.FindingType, &f.Assessment, &calibreJSON, &binderyJSON, &f.MatchMethod,
 			&f.MatchConfidence, &f.Reason, &f.ComparisonFingerprint, &f.IgnoredFingerprint, &f.State,
-			&created, &updated); err != nil {
+			&created, &updated}
+		if withTitle {
+			dest = append(dest, &f.BookTitle)
+		}
+		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("scan calibre audit finding: %w", err)
 		}
 		if err := json.Unmarshal([]byte(calibreJSON), &f.CalibreEvidence); err != nil {
