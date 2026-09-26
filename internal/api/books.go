@@ -27,6 +27,7 @@ type authoritativeService interface {
 	IsEnabled(ctx context.Context) bool
 	IsOwned(ctx context.Context, book *models.Book) bool
 	FilterWantedBooks(ctx context.Context, books []models.Book) []models.Book
+	ApplyEffectiveStatus(ctx context.Context, book *models.Book)
 	ApplyEffectiveStatuses(ctx context.Context, books []models.Book)
 }
 
@@ -383,6 +384,9 @@ func (h *BookHandler) Get(w http.ResponseWriter, r *http.Request) {
 	cleanBookDescription(book)
 	h.attachBookFiles(r.Context(), book)
 	h.attachBookIdentifiers(r.Context(), book)
+	if h.authoritative != nil {
+		h.authoritative.ApplyEffectiveStatus(r.Context(), book)
+	}
 	writeJSON(w, http.StatusOK, book)
 }
 

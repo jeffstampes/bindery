@@ -375,6 +375,78 @@ describe('BookDetailPage — header & metadata', () => {
   })
 })
 
+describe('BookDetailPage — authoritative ebook ownership', () => {
+  it('shows a CWA-owned ebook as imported without inventing a Bindery file', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(makeBook({ effectiveStatus: 'imported' }))
+    renderBookDetailPage()
+    expect(await screen.findByText('Imported')).toBeInTheDocument()
+    const file = within(screen.getByTestId('file-group-ebook'))
+    expect(file.getByText('Owned in Calibre/CWA — no local Bindery file')).toBeInTheDocument()
+    expect(screen.queryByText('No file on disk')).toBeNull()
+    expect(file.queryByRole('link', { name: /Download/ })).toBeNull()
+    expect(file.queryByRole('button', { name: /Delete file/ })).toBeNull()
+  })
+
+  it('keeps an ordinary wanted ebook and its empty file section unchanged', async () => {
+    renderBookDetailPage()
+    await screen.findByRole('heading', { name: 'The Final Empire' })
+    expect(screen.getAllByText('Wanted')[0]).toBeInTheDocument()
+    expect(screen.getByText('No file on disk')).toBeInTheDocument()
+    expect(screen.queryByTestId('file-group-ebook')).toBeNull()
+  })
+
+  it('keeps a local ebook file and download action when the effective status is imported', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(makeBook({
+      effectiveStatus: 'imported',
+      ebookFilePath: '/library/book.epub',
+      bookFiles: [makeFile({ id: 1 })],
+    }))
+    renderBookDetailPage()
+    expect(await screen.findByText('Imported')).toBeInTheDocument()
+    const file = within(screen.getByTestId('file-group-ebook'))
+    expect(file.getByRole('link', { name: 'Download book.epub' })).toBeInTheDocument()
+    expect(file.queryByText('Owned in Calibre/CWA — no local Bindery file')).toBeNull()
+  })
+
+  it('shows ebook ownership and missing audio independently for a dual-format book', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(makeBook({
+      mediaType: 'both', effectiveEbookStatus: 'imported', effectiveAudiobookStatus: 'wanted',
+    }))
+    renderBookDetailPage()
+    await screen.findByRole('heading', { name: 'The Final Empire' })
+    expect(screen.getAllByText('Wanted')[0]).toBeInTheDocument()
+    expect(within(screen.getByTestId('file-group-ebook')).getByText('Owned in Calibre/CWA — no local Bindery file')).toBeInTheDocument()
+    expect(within(screen.getByTestId('file-group-audiobook')).getByText('Not downloaded')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /Download/ })).toBeNull()
+  })
+
+  it('shows imported aggregate and an actual audiobook file without an ebook file', async () => {
+    vi.mocked(api.getBook).mockResolvedValue(makeBook({
+      mediaType: 'both', effectiveStatus: 'imported', effectiveEbookStatus: 'imported',
+      effectiveAudiobookStatus: 'imported', audiobookFilePath: '/library/audio.m4b',
+      bookFiles: [makeFile({ id: 2, format: 'audiobook', path: '/library/audio.m4b' })],
+    }))
+    renderBookDetailPage()
+    expect(await screen.findByText('Imported')).toBeInTheDocument()
+    expect(within(screen.getByTestId('file-group-ebook')).getByText('Owned in Calibre/CWA — no local Bindery file')).toBeInTheDocument()
+    expect(within(screen.getByTestId('file-group-audiobook')).getByRole('link', { name: 'Download audio.m4b' })).toBeInTheDocument()
+  })
+  it('keeps projected ownership after a mutation response without effective status', async () => {
+    const owned = makeBook({ effectiveStatus: 'imported' })
+    vi.mocked(api.getBook)
+      .mockResolvedValueOnce(owned)
+      .mockResolvedValueOnce(makeBook({ effectiveStatus: 'imported', monitored: false }))
+    vi.mocked(api.updateBook).mockResolvedValue(makeBook({ monitored: false }))
+    renderBookDetailPage()
+    await screen.findByText('Owned in Calibre/CWA — no local Bindery file')
+    fireEvent.click(screen.getByRole('switch', { name: 'Unmonitor' }))
+    await waitFor(() => expect(api.getBook).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText('Imported')).toBeInTheDocument()
+    expect(screen.getByText('Owned in Calibre/CWA — no local Bindery file')).toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: 'Monitor' })).toBeInTheDocument()
+  })
+})
+
 describe('BookDetailPage — file section actions', () => {
   // A tracked row names itself with ?path=, which is the only form that can
   // pick one file out of several of the same format (#2408).

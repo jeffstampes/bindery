@@ -81,7 +81,8 @@ type Book struct {
 	AuthorUnmonitored bool `json:"authorUnmonitored,omitempty"`
 
 	// EffectiveStatus and its per-format counterparts are response-only
-	// projections for author lists; authoritative matches never rewrite Status.
+	// projections for author lists and book detail; authoritative matches never
+	// rewrite Status or create a local file path.
 	EffectiveStatus          string `json:"effectiveStatus,omitempty"`
 	EffectiveEbookStatus     string `json:"effectiveEbookStatus,omitempty"`
 	EffectiveAudiobookStatus string `json:"effectiveAudiobookStatus,omitempty"`

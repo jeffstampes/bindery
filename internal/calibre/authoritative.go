@@ -188,9 +188,23 @@ func (s *AuthoritativeService) FilterWantedBooks(ctx context.Context, books []mo
 	return out
 }
 
+// ApplyEffectiveStatus projects one book for a detail response using a single
+// indexed reference lookup. It shares the author-list projection below, but
+// does not load every library match just to render one book.
+func (s *AuthoritativeService) ApplyEffectiveStatus(ctx context.Context, book *models.Book) {
+	if book == nil || !s.IsEnabled(ctx) || s.crossRef == nil {
+		return
+	}
+	ref, err := s.crossRef.GetByBookID(ctx, book.ID)
+	if err != nil {
+		slog.Warn("authoritative mode: failed to query book match", "book_id", book.ID, "error", err)
+		return
+	}
+	applyEffectiveStatus(book, ref != nil && ref.Status == models.CalibreMatchStatusMatched)
+}
+
 // ApplyEffectiveStatuses annotates author-list response books without changing
-// persisted status. A single bulk reference read serves the whole page; callers
-// use EffectiveStatus for one book and FilterWantedBooks for acquisition lists.
+// persisted status. A single bulk reference read serves the whole page.
 func (s *AuthoritativeService) ApplyEffectiveStatuses(ctx context.Context, books []models.Book) {
 	if len(books) == 0 || !s.IsEnabled(ctx) || s.crossRef == nil {
 		return
@@ -202,23 +216,26 @@ func (s *AuthoritativeService) ApplyEffectiveStatuses(ctx context.Context, books
 	}
 	for i := range books {
 		b := &books[i]
-		matched := matchedMap[b.ID].Status == models.CalibreMatchStatusMatched
-		if b.MediaType == models.MediaTypeBoth && b.Status != models.BookStatusSkipped {
-			// Format-filtered author views must not infer ebook ownership from
-			// file paths: a Calibre match can satisfy ebook with no local file,
-			// while the aggregate remains wanted for its missing audiobook.
-			b.EffectiveEbookStatus = b.Status
-			b.EffectiveAudiobookStatus = b.Status
-			if ownedForFormat(b, models.MediaTypeEbook, matched) {
-				b.EffectiveEbookStatus = models.BookStatusImported
-			}
-			if ownedForFormat(b, models.MediaTypeAudiobook, false) {
-				b.EffectiveAudiobookStatus = models.BookStatusImported
-			}
+		applyEffectiveStatus(b, matchedMap[b.ID].Status == models.CalibreMatchStatusMatched)
+	}
+}
+
+// applyEffectiveStatus is the shared #18 author/detail response-only projection.
+// A Calibre match satisfies ebooks only; an untyped legacy file on a dual-format
+// work cannot independently satisfy either requested format.
+func applyEffectiveStatus(b *models.Book, matched bool) {
+	if b.MediaType == models.MediaTypeBoth && b.Status != models.BookStatusSkipped {
+		b.EffectiveEbookStatus = b.Status
+		b.EffectiveAudiobookStatus = b.Status
+		if ownedForFormat(b, models.MediaTypeEbook, matched) {
+			b.EffectiveEbookStatus = models.BookStatusImported
 		}
-		if b.Status != models.BookStatusSkipped && ownedWithMatch(b, matched) {
-			b.EffectiveStatus = models.BookStatusImported
+		if ownedForFormat(b, models.MediaTypeAudiobook, false) {
+			b.EffectiveAudiobookStatus = models.BookStatusImported
 		}
+	}
+	if b.Status != models.BookStatusSkipped && ownedWithMatch(b, matched) {
+		b.EffectiveStatus = models.BookStatusImported
 	}
 }
 

@@ -126,19 +126,18 @@ function fileRows(book: Book): FileRow[] {
 // Ebook first, matching the server's format-less resolution order.
 //
 // A format the book wants but holds no file for is included as an EMPTY group
-// (only while some other file exists — a book with nothing on disk keeps the
-// plain "no file" line). The old format switcher marked missing formats with
-// "Not downloaded"; dropping the switcher without this lost the only per-format
-// answer to "which one am I still waiting on".
+// while some other file exists, or when its ebook is owned in Calibre/CWA.
+// Ordinary books with nothing on disk keep the plain "no file" line.
 function groupRowsByFormat(
   rows: FileRow[],
   mediaType: MediaType,
+  calibreEbookOwned = false,
 ): { format: 'ebook' | 'audiobook'; rows: FileRow[] }[] {
   const formats: ('ebook' | 'audiobook')[] = ['ebook', 'audiobook']
   const wanted = (f: string) => mediaType === f || mediaType === 'both'
   return formats
     .map(format => ({ format, rows: rows.filter(r => r.format === format) }))
-    .filter(g => g.rows.length > 0 || (rows.length > 0 && wanted(g.format)))
+    .filter(g => g.rows.length > 0 || ((rows.length > 0 || calibreEbookOwned) && wanted(g.format)))
 }
 
 
@@ -412,13 +411,24 @@ function BookDetailPageInner() {
     }
   }
 
+  // Mutation endpoints return persisted books without the GET-only ownership
+  // projection. Refresh an already projected book (or a changed media type)
+  // rather than briefly reverting its badge to the stored Wanted status.
+  const setUpdatedBook = async (updated: Book) => {
+    if (book && (book.effectiveStatus || book.effectiveEbookStatus || updated.mediaType !== book.mediaType)) {
+      setBook(await api.getBook(updated.id).catch(() => updated))
+    } else {
+      setBook(updated)
+    }
+  }
+
   const saveField = async (patch: Partial<Book>) => {
     if (!book) return
     setSaving(true)
     setError(null)
     try {
       const updated = await api.updateBook(book.id, patch)
-      setBook(updated)
+      await setUpdatedBook(updated)
       if (patch.asin !== undefined) setAsinDraft(updated.asin || '')
     } catch (e) {
       setError(e instanceof Error ? e.message : t('bookDetail.saveFailed'))
@@ -491,7 +501,7 @@ function BookDetailPageInner() {
     try {
       const params = deleteTarget.format ? `?format=${deleteTarget.format}` : ''
       const updated = await api.deleteBookFile(book.id, params)
-      setBook(updated)
+      await setUpdatedBook(updated)
       setDeleteTarget(null)
       const h = await api.listHistory({ bookId: book.id }).then(p => p.items).catch(() => events)
       setEvents(h)
@@ -510,7 +520,7 @@ function BookDetailPageInner() {
     setError(null)
     try {
       const updated = await api.deleteBookFile(book.id, `?path=${encodeURIComponent(deregisterTarget.path)}`)
-      setBook(updated)
+      await setUpdatedBook(updated)
       setDeregisterTarget(null)
       const h = await api.listHistory({ bookId: book.id }).then(p => p.items).catch(() => events)
       setEvents(h)
@@ -541,7 +551,7 @@ function BookDetailPageInner() {
     setError(null)
     try {
       const updated = await api.enrichAudiobook(book.id)
-      setBook(updated)
+      await setUpdatedBook(updated)
     } catch (e) {
       setError(e instanceof Error ? e.message : t('bookDetail.enrichFailed'))
     } finally {
@@ -554,7 +564,7 @@ function BookDetailPageInner() {
     setTogglingExclude(true)
     try {
       const updated = await api.toggleExcluded(book.id)
-      setBook(updated)
+      await setUpdatedBook(updated)
     } catch (e) {
       setError(e instanceof Error ? e.message : t('bookDetail.excludeFailed'))
     } finally {
@@ -701,9 +711,16 @@ function BookDetailPageInner() {
   })()
   const sourceLinks = identityRows.flatMap(row => row.link ? [row.link] : [])
 
-  // Display truth is the file inventory, never the declared media type.
+  // The effective statuses come from the same backend projection as author
+  // lists. They describe satisfaction, not local inventory. Only label an
+  // ebook as Calibre-owned when no typed Bindery ebook file explains it.
   const rows = fileRows(book)
-  const groups = groupRowsByFormat(rows, mt)
+  const calibreEbookOwned = book.status === 'wanted' && (
+    (mt === 'ebook' && book.effectiveStatus === 'imported') ||
+    (mt === 'both' && book.effectiveEbookStatus === 'imported')
+  ) && !book.ebookFilePath && !(mt === 'ebook' && book.filePath) &&
+    !book.bookFiles?.some(f => f.format === 'ebook')
+  const groups = groupRowsByFormat(rows, mt, calibreEbookOwned)
   const hasAnyFile = rows.length > 0
 
   const lang = languageName(book.language)
@@ -794,9 +811,9 @@ function BookDetailPageInner() {
 
           <div className="flex flex-wrap items-center gap-2 mt-3 text-xs">
             {(() => {
-              const badge = bookStatusBadge(book.status, book.monitored, t)
+              const badge = bookStatusBadge(book.effectiveStatus || book.status, book.monitored, t)
               return (
-                <span className={`inline-flex items-center px-2 py-0.5 rounded font-medium ${badge.colorClass}`} title={badge.description}>
+                <span className={`inline-flex items-center px-2 py-0.5 rounded font-medium ${badge.colorClass}`} title={calibreEbookOwned && book.effectiveStatus === 'imported' ? t('bookDetail.calibreOwnedDescription') : badge.description}>
                   {badge.label}
                 </span>
               )
@@ -971,13 +988,15 @@ function BookDetailPageInner() {
             {/* The declared media type is what search and monitoring hunt for.
                 It is labelled as intent because the files below may disagree
                 with it, and when they do the files are the truth. */}
-            <span className="text-xs text-slate-500 dark:text-zinc-500">{t('bookDetail.wantedFormatLabel')}</span>
+            <span className="text-xs text-slate-500 dark:text-zinc-500">
+              {t(calibreEbookOwned ? 'bookDetail.requestedFormatLabel' : 'bookDetail.wantedFormatLabel')}
+            </span>
             <span className="w-fit">
               <MediaBadge type={mt} />
             </span>
           </div>
 
-          {hasAnyFile ? (
+          {hasAnyFile || calibreEbookOwned ? (
             <div className="mt-4 space-y-4">
               {groups.map(group => (
                 <div
@@ -986,14 +1005,15 @@ function BookDetailPageInner() {
                   data-testid={`file-group-${group.format}`}
                 >
                   {group.rows.length === 0 ? (
-                    // A format the book wants but has no file for. The old
-                    // format switcher carried this ("Not downloaded"); the
-                    // list has to say it too or the missing half of a
-                    // dual-format book simply vanishes.
+                    // Empty format: distinguish Calibre/CWA ebook ownership
+                    // from an actually missing format. Neither has a local
+                    // Bindery path or any file actions to offer.
                     <div className="px-3 py-2 flex flex-wrap items-center gap-2">
                       <MediaBadge type={group.format} />
                       <span className="text-xs text-slate-500 dark:text-zinc-500">
-                        {t('bookDetail.formatNotOnDisk')}
+                        {group.format === 'ebook' && calibreEbookOwned
+                          ? t('bookDetail.calibreOwnedNoLocalFile')
+                          : t('bookDetail.formatNotOnDisk')}
                       </span>
                     </div>
                   ) : (
@@ -1357,7 +1377,7 @@ function BookDetailPageInner() {
         <EditBookModal
           book={book}
           onClose={() => setShowEdit(false)}
-          onSaved={updated => setBook(updated)}
+          onSaved={updated => { void setUpdatedBook(updated) }}
         />
       )}
       {showRebind && (
@@ -1365,7 +1385,7 @@ function BookDetailPageInner() {
           book={book}
           onClose={() => setShowRebind(false)}
           onSuccess={updated => {
-            setBook(updated)
+            void setUpdatedBook(updated)
             setShowRebind(false)
           }}
         />
