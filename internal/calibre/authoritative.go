@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/vavallee/bindery/internal/db"
 	"github.com/vavallee/bindery/internal/models"
@@ -17,6 +18,11 @@ type AuthoritativeService struct {
 	crossRef *db.CalibreCrossReferenceRepo
 	books    *db.BookRepo
 	editions *db.EditionRepo
+	audits   *db.CalibreAuditRepo
+	// Serialize long audit snapshots and authoritative reconciliation within
+	// the single service instance shared by scheduled/manual runs. Otherwise a
+	// slower pass could commit older findings after a newer pass.
+	passMu sync.Mutex
 }
 
 // NewAuthoritativeService constructs an AuthoritativeService instance.
@@ -179,12 +185,13 @@ func (s *AuthoritativeService) FilterWantedBooks(ctx context.Context, books []mo
 
 // ReconcileResult captures summary statistics of an authoritative reconciliation pass.
 type ReconcileResult struct {
-	TotalCalibreBooks int `json:"totalCalibreBooks"`
-	TotalBinderyBooks int `json:"totalBinderyBooks"`
-	Matched           int `json:"matched"`
-	Revalidated       int `json:"revalidated"`
-	Stale             int `json:"stale"`
-	Unmatched         int `json:"unmatched"`
+	TotalCalibreBooks int          `json:"totalCalibreBooks"`
+	TotalBinderyBooks int          `json:"totalBinderyBooks"`
+	Matched           int          `json:"matched"`
+	Revalidated       int          `json:"revalidated"`
+	Stale             int          `json:"stale"`
+	Unmatched         int          `json:"unmatched"`
+	Audit             *AuditResult `json:"audit,omitempty"`
 }
 
 // Reconcile performs a full reconciliation pass between Bindery works and Calibre books
@@ -195,6 +202,10 @@ type ReconcileResult struct {
 func (s *AuthoritativeService) Reconcile(ctx context.Context) (*ReconcileResult, error) {
 	if !s.IsEnabled(ctx) {
 		return nil, ErrAuthoritativeDisabled
+	}
+	if s.audits != nil {
+		s.passMu.Lock()
+		defer s.passMu.Unlock()
 	}
 	libPath := s.LibraryPath(ctx)
 	if libPath == "" {
@@ -298,5 +309,14 @@ func (s *AuthoritativeService) Reconcile(ctx context.Context) (*ReconcileResult,
 		}
 	}
 
+	if s.audits != nil {
+		if s.editions == nil {
+			return res, fmt.Errorf("calibre metadata audit requires an edition repository")
+		}
+		res.Audit, err = s.auditSnapshot(ctx, calibreBooks, binderyBooks, idMap, edMap, idx)
+		if err != nil {
+			return res, fmt.Errorf("reconciliation completed but calibre metadata audit failed: %w", err)
+		}
+	}
 	return res, nil
 }

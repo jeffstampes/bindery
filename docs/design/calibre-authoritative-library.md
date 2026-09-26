@@ -1,9 +1,8 @@
 # Calibre/CWA authoritative-library mode — design contract
 
-Status: **accepted, partially implemented.** The configuration surface described
-in [Configuration](#configuration) ships now. Everything under
-[Planned slices](#planned-slices) is design intent that later changes must
-honour, not code that exists today.
+Status: **accepted, implemented through the backend metadata audit (#6).**
+The review UI (#7) and any Calibre write-back (#8) remain planned. The
+configuration and implemented slices below are part of this branch.
 
 Tracking: [#1](https://github.com/jeffstampes/bindery/issues/1) ·
 upstream [vavallee/bindery#2782](https://github.com/vavallee/bindery/issues/2782)
@@ -120,23 +119,82 @@ an instance can never be locked into it.
 | `cwa.ingest_path` | Unaffected, for the same reason |
 | `import.mode = external` | Unaffected. Complementary, if anything: the external tool owning the library is the topology this mode is designed around |
 
-## Planned slices
+## Implementation slices
 
-Not implemented. Listed so each one can be checked against the invariants above
-rather than re-derived.
+Each slice is checked against the authority invariants above.
 
 | Slice | Status | Scope | Key invariants |
 |---|---|---|---|
 | Live read-only owned library | Implemented (#3) | Read `metadata.db` as a live owned-book source | 3, 9 |
 | Work ↔ Calibre matching | Implemented (#4) | Identifier-first matching, conservative author/title fallback, with provenance and confidence | 4, 5, 9 |
-| Owned-state integration | Planned (#5) | A confident match marks a Bindery work owned/satisfied, without importing its metadata | 4, 5 |
-| Metadata audit | Planned (#6) | Compare Calibre's metadata for owned books against provider metadata and report | 6, 7, 9 |
+| Owned-state integration | Implemented (#5) | A confident match marks a Bindery work owned/satisfied, without importing its metadata | 4, 5 |
+| Metadata audit | Implemented (#6) | Compare Calibre's metadata for owned books against stored external evidence and persist advisory findings | 6, 7, 9 |
 | Audit/review UI | Planned (#7) | Surface discrepancies for human decision | 7 |
 | `BinderyMismatch` write-back | Planned (#8) | Optional, separately opt-in, one Bindery-owned tag | 3, 8 |
 
-Matching, owned-state reconciliation, metadata auditing and Calibre write-back
-are **explicitly out of scope** for the configuration slice. Enabling the setting
-today records the operator's intent and changes no behaviour.
+Reconciliation satisfies ebook ownership for confident matches and runs the
+backend metadata audit. It creates no Calibre-backed catalogue book. There is
+no review UI (#7) or Calibre write-back (#8) in this slice.
+
+### Backend metadata audit (#6)
+
+`AuthoritativeService.Reconcile` reuses its single read-only Calibre snapshot
+and bulk-loaded Bindery work/edition/identifier data. `AuthoritativeService.Audit`
+can independently recheck against a fresh read-only snapshot and fresh stored
+external evidence without updating cross-references. Both are gated on the
+opt-in setting. Only currently confident, revalidated ebook matches whose
+Bindery work has a recognised external identity are comparable; ambiguous,
+stale, excluded, Calibre-/ABS-originated and manual-only records are not
+independent provider evidence.
+
+The audit compares stored provider work IDs and provider-identified **ebook**
+edition ISBNs/ASINs against Calibre's identifiers; unattributed work ASINs,
+audiobook editions and imported/local editions cannot serve as ebook provider
+evidence. Invalid ISBNs remain reportable identifier values, but never establish
+an exact match or select an edition. Titles and languages prefer a uniquely
+identifier-matched provider edition when available, otherwise use the stored
+external work. All Calibre language values, not just the primary one, participate
+in the language comparison.
+Authors come from externally identified author rows; series/positions come from
+provider-identified `series_books` links. Publication years are compared **only**
+for a unique provider edition sharing an identifier with the owned copy (never
+against a work's original release date). Multiple provider editions can agree
+with a Calibre ISBN without asserting that an unrelated publication date is
+wrong. Locked work title/language values are not treated as provider evidence.
+
+Normalization is field-specific and conservative: valid ISBN-10/13 become the
+same ISBN-13; ASIN case and known identifier prefixes are canonicalized;
+titles/authors/series use the existing Unicode-safe search fold (authors also
+support `Last, First`); language uses `NormalizeLanguageCode`; series positions
+are numeric to hundredths; publication dates compare years, not months/days.
+No fuzzy title or series matching discards substantive words. Disagreements
+are advisory (`needs_review` or `ambiguous`), never automatic corrections.
+
+Findings contain the linked Bindery/Calibre IDs, field/type, original values,
+stored-source labels and IDs, match method/confidence, a reason and a state.
+They live in Bindery's finding table, **not** as a shadow Calibre catalogue.
+`unresolved` can be human-marked `ignored` with an optimistic fingerprint
+check. A recheck keeps the ignore only when normalized compared values, current
+match method/confidence and relevant provider edition/series identity are
+unchanged; formatting-only evidence updates retain it. If a match temporarily
+disappears, the finding becomes `unmatched` while retaining the ignored
+fingerprint, so the *identical* comparison can restore the ignore. Changed
+values or match evidence reopen it. Equal current values make a previous
+finding `resolved`; a missing confident match or lost comparable evidence makes
+it `unmatched`, not clean. No HTTP review endpoint or UI is included until #7.
+
+The standalone audit reads Calibre's headers/authors/formats/identifiers/language
+in five bulk SQL queries (plus the read-only open probe), without a per-book
+cover-file stat, and Bindery's books, identifiers, editions, cross-references,
+previous findings and series links in six bulk queries. Comparisons use indexed
+maps; only changed finding rows are written, in a single Bindery transaction
+with batches of 50. Deleted books are filtered in the write statement rather
+than aborting the pass. Audits and reconciliations sharing one service instance
+are serialized so a slower pass cannot replace newer findings. Space and work
+are linear in library size, stored evidence and finding count, not per-book
+database queries. The existing #5 reconciliation path still calls `GetBook`
+while revalidating prior matches; that earlier matching behavior is unchanged
+by the audit. The standalone `Audit` method avoids that path entirely.
 
 ## Decisions worth restating
 
