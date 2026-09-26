@@ -433,6 +433,63 @@ func TestSearchBook_DualFormat_MediaTypeTagging(t *testing.T) {
 	}
 }
 
+func TestSearchBook_DualFormat_AudiobookOnly(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	ctx := context.Background()
+	authors := db.NewAuthorRepo(database)
+	author := &models.Author{ForeignID: "OL1A", Name: "Jane Doe", Monitored: true}
+	if err := authors.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	books := db.NewBookRepo(database)
+	book := &models.Book{ForeignID: "OL1W", Title: "Test Book", AuthorID: author.ID, MediaType: models.MediaTypeBoth}
+	if err := books.Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+	searcher := &mockIndexerSearcher{
+		ebookResults: []newznab.SearchResult{{GUID: "ebook", Title: "Test epub"}},
+		audioResults: []newznab.SearchResult{{GUID: "audio", Title: "Test m4b"}},
+	}
+	h := NewIndexerHandler(db.NewIndexerRepo(database), books, authors,
+		db.NewMetadataProfileRepo(database), searcher, db.NewSettingsRepo(database), db.NewBlocklistRepo(database))
+	for _, tc := range []struct {
+		format string
+		status int
+	}{
+		{"audiobook", http.StatusOK}, {"unknown", http.StatusBadRequest},
+	} {
+		rec := httptest.NewRecorder()
+		req := withURLParam(httptest.NewRequest(http.MethodPost,
+			"/book/1/search?mediaType="+tc.format, nil), "id", strconv.FormatInt(book.ID, 10))
+		h.SearchBook(rec, req)
+		if rec.Code != tc.status {
+			t.Fatalf("format %q: got %d: %s", tc.format, rec.Code, rec.Body.String())
+		}
+		if tc.status != http.StatusOK {
+			continue
+		}
+		if got := searcher.criteria().MediaType; got != models.MediaTypeAudiobook {
+			t.Fatalf("searched %q instead of audiobook", got)
+		}
+		var response struct {
+			Results []struct {
+				GUID      string `json:"guid"`
+				MediaType string `json:"mediaType"`
+			} `json:"results"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		if len(response.Results) != 1 || response.Results[0].GUID != "audio" || response.Results[0].MediaType != "audiobook" {
+			t.Fatalf("format-scoped response: %+v", response.Results)
+		}
+	}
+}
+
 // SearchBook must not return the indexer apikey the search path signs into the
 // download URL: interactive search is available to non-admin users, so leaking
 // the shared indexer credential in nzbUrl is a cross-user secret disclosure. The

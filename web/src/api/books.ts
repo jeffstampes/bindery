@@ -227,7 +227,9 @@ export const booksApi = {
   deleteBook: (id: number, deleteFiles = false) =>
     request<void>(`/book/${id}${deleteFiles ? '?deleteFiles=true' : ''}`, { method: 'DELETE' }),
   deleteBookFile: (id: number, queryParams = '') => request<Book>(`/book/${id}/file${queryParams}`, { method: 'DELETE' }),
-  searchBook: (id: number) => request<SearchBookResponse>(`/book/${id}/search`, { method: 'POST' }),
+  searchBook: (id: number, mediaType?: 'ebook' | 'audiobook') => request<SearchBookResponse>(
+    `/book/${id}/search${mediaType ? `?mediaType=${mediaType}` : ''}`, { method: 'POST' },
+  ),
   getLastSearchDebug: () => request<SearchDebug>(`/search/last-debug`),
   enrichAudiobook: (id: number) => request<Book>(`/book/${id}/enrich-audiobook`, { method: 'POST' }),
   toggleExcluded: (id: number) => request<Book>(`/book/${id}/exclude`, { method: 'PUT' }),

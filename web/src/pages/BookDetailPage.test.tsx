@@ -385,6 +385,8 @@ describe('BookDetailPage — authoritative ebook ownership', () => {
     expect(screen.queryByText('No file on disk')).toBeNull()
     expect(file.queryByRole('link', { name: /Download/ })).toBeNull()
     expect(file.queryByRole('button', { name: /Delete file/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Search ebook indexers/ })).toBeNull()
+    expect(api.searchBook).not.toHaveBeenCalled()
   })
 
   it('keeps an ordinary wanted ebook and its empty file section unchanged', async () => {
@@ -393,6 +395,7 @@ describe('BookDetailPage — authoritative ebook ownership', () => {
     expect(screen.getAllByText('Wanted')[0]).toBeInTheDocument()
     expect(screen.getByText('No file on disk')).toBeInTheDocument()
     expect(screen.queryByTestId('file-group-ebook')).toBeNull()
+    expect(screen.getByRole('button', { name: /Search ebook indexers/ })).toBeInTheDocument()
   })
 
   it('keeps a local ebook file and download action when the effective status is imported', async () => {
@@ -418,6 +421,9 @@ describe('BookDetailPage — authoritative ebook ownership', () => {
     expect(within(screen.getByTestId('file-group-ebook')).getByText('Owned in Calibre/CWA — no local Bindery file')).toBeInTheDocument()
     expect(within(screen.getByTestId('file-group-audiobook')).getByText('Not downloaded')).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: /Download/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Search both indexers/ })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Search audiobook indexers/ }))
+    await waitFor(() => expect(api.searchBook).toHaveBeenCalledWith(42, 'audiobook'))
   })
 
   it('shows imported aggregate and an actual audiobook file without an ebook file', async () => {
@@ -430,6 +436,7 @@ describe('BookDetailPage — authoritative ebook ownership', () => {
     expect(await screen.findByText('Imported')).toBeInTheDocument()
     expect(within(screen.getByTestId('file-group-ebook')).getByText('Owned in Calibre/CWA — no local Bindery file')).toBeInTheDocument()
     expect(within(screen.getByTestId('file-group-audiobook')).getByRole('link', { name: 'Download audio.m4b' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Search .*indexers/ })).toBeNull()
   })
   it('keeps projected ownership after a mutation response without effective status', async () => {
     const owned = makeBook({ effectiveStatus: 'imported' })

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/vavallee/bindery/internal/db"
+	"github.com/vavallee/bindery/internal/metadata"
 	"github.com/vavallee/bindery/internal/models"
 	"github.com/vavallee/bindery/internal/textutil"
 )
@@ -52,9 +53,45 @@ func auditExternalBook(book *models.Book) bool {
 }
 
 func compareAuditBook(book *models.Book, cb *CalibreBook, ref *models.CalibreWorkCrossReference, series []db.BookSeriesMembership) map[auditFieldKey]auditOutcome {
+	return compareAuditBookWithIdentity(book, cb, ref, series, models.CalibreIdentitySnapshot{})
+}
+
+func compareAuditBookWithIdentity(book *models.Book, cb *CalibreBook, ref *models.CalibreWorkCrossReference,
+	series []db.BookSeriesMembership, identity models.CalibreIdentitySnapshot,
+) map[auditFieldKey]auditOutcome {
+	if identity.BookID == book.ID && identity.CalibreID == cb.CalibreID && identity.RootKey == identityRootKey(book) {
+		rootFound := false
+		for _, e := range identity.Evidence {
+			if e.Status == models.CalibreIdentityRoot && e.Method == metadata.RawMethodExactBook {
+				rootFound = true
+				break
+			}
+		}
+		if !rootFound {
+			return map[auditFieldKey]auditOutcome{} // failed/partial root is unknown, not a negative result
+		}
+		// Stored cross-provider aliases and editions are not identity evidence
+		// merely because they are present on the Bindery book. Revalidate them
+		// against the canonical-root graph before comparing with CWA.
+		copyBook := *book
+		copyBook.Identifiers = nil
+		rootEditions := make(map[string]bool)
+		for _, e := range identity.Evidence {
+			if e.Status == models.CalibreIdentityRoot && e.EditionID != "" {
+				rootEditions[e.EditionID] = true
+			}
+		}
+		copyBook.Editions = nil
+		for _, ed := range book.Editions {
+			if rootEditions[ed.ForeignID] {
+				copyBook.Editions = append(copyBook.Editions, ed)
+			}
+		}
+		book = &copyBook
+	}
 	c := &auditComparator{book: book, calibre: cb, ref: ref, outcomes: make(map[auditFieldKey]auditOutcome)}
 	calibreIDs := calibreAuditIdentifiers(cb)
-	c.compareIdentifiers(calibreIDs)
+	c.compareIdentifiers(calibreIDs, identity)
 	matchedEdition := auditMatchedEdition(book.Editions, calibreIDs)
 	c.compareTitle(matchedEdition)
 	c.compareAuthors()

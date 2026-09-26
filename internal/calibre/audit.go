@@ -104,6 +104,10 @@ func (s *AuthoritativeService) auditSnapshot(
 		b.Editions = editions[b.ID]
 		booksByID[b.ID] = b
 	}
+	identity, err := s.refreshIdentity(ctx, refs, booksByID, idx)
+	if err != nil {
+		return nil, fmt.Errorf("refresh calibre identity evidence: %w", err)
+	}
 	old := make(map[auditFindingKey]models.CalibreAuditFinding, len(previous))
 	for _, f := range previous {
 		old[auditFindingKey{f.BookID, f.Field, f.EvidenceKey}] = f
@@ -138,7 +142,7 @@ func (s *AuthoritativeService) auditSnapshot(
 		currentRef := ref
 		currentRef.MatchMethod = match.MatchMethod
 		currentRef.Confidence = match.Confidence
-		outcomes := compareAuditBook(book, cb, &currentRef, series[book.ID])
+		outcomes := compareAuditBookWithIdentity(book, cb, &currentRef, series[book.ID], identity[book.ID])
 		for key, outcome := range outcomes {
 			findingKey := auditFindingKey{ref.BookID, key.field, key.key}
 			prior, exists := old[findingKey]

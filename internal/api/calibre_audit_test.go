@@ -29,7 +29,7 @@ func TestCalibreAuditReviewRoutes(t *testing.T) {
 	ctx := context.Background()
 	settings := db.NewSettingsRepo(database)
 	repo := db.NewCalibreAuditRepo(database)
-	service := calibre.NewAuthoritativeService(settings, nil, nil)
+	service := calibre.NewAuthoritativeService(settings, db.NewCalibreCrossReferenceRepo(database), nil).WithIdentityEvidence(db.NewCalibreIdentityRepo(database), nil)
 	h := NewCalibreAuditHandler(service, repo)
 	r := chi.NewRouter()
 	r.Group(func(r chi.Router) {
@@ -38,6 +38,7 @@ func TestCalibreAuditReviewRoutes(t *testing.T) {
 		r.Post("/calibre/audit/recheck", h.Recheck)
 		r.Get("/calibre/audit/recheck/status", h.RecheckStatus)
 		r.Post("/calibre/audit/{id}/ignore", h.Ignore)
+		r.Get("/calibre/identity/{bookID}", h.Identity)
 	})
 	request := func(role, method, path, body string) *httptest.ResponseRecorder {
 		t.Helper()
@@ -52,6 +53,7 @@ func TestCalibreAuditReviewRoutes(t *testing.T) {
 		{http.MethodPost, "/calibre/audit/recheck"},
 		{http.MethodGet, "/calibre/audit/recheck/status"},
 		{http.MethodPost, "/calibre/audit/1/ignore"},
+		{http.MethodGet, "/calibre/identity/1"},
 	} {
 		if rec := request("user", route.method, route.path, ""); rec.Code != http.StatusForbidden {
 			t.Fatalf("non-admin %s %s: %d", route.method, route.path, rec.Code)
@@ -74,6 +76,30 @@ func TestCalibreAuditReviewRoutes(t *testing.T) {
 	book := &models.Book{AuthorID: author.ID, Title: "Provider Title", ForeignID: "OL1W"}
 	if err := db.NewBookRepo(database).Create(ctx, book); err != nil {
 		t.Fatal(err)
+	}
+	if err := db.NewCalibreCrossReferenceRepo(database).UpsertCrossReference(ctx, &models.CalibreWorkCrossReference{
+		BookID: book.ID, CalibreID: 17, Confidence: models.CalibreMatchConfidenceExact,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := request("admin", http.MethodGet, "/calibre/identity/not-a-book", ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid identity book id: %d", rec.Code)
+	}
+	if rec := request("admin", http.MethodGet, "/calibre/identity/999", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("missing identity: %d", rec.Code)
+	}
+	if err := db.NewCalibreIdentityRepo(database).ReplaceBatch(ctx, []models.CalibreIdentitySnapshot{{
+		BookID: book.ID, CalibreID: 17, RootKey: "openlibrary:OL1W",
+		Evidence: []models.CalibreIdentityEvidence{{Key: "root", Provider: "openlibrary", ForeignID: "OL1W", Status: models.CalibreIdentityRoot, WorkConfidence: "canonical", EditionConfidence: "unresolved"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	identityPath := "/calibre/identity/" + strconv.FormatInt(book.ID, 10)
+	if rec := request("admin", http.MethodGet, identityPath, ""); rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte(`"rootKey":"openlibrary:OL1W"`)) {
+		t.Fatalf("identity snapshot: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := request("user", http.MethodGet, identityPath, ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("non-admin identity snapshot: %d", rec.Code)
 	}
 	finding := models.CalibreAuditFinding{
 		BookID: book.ID, CalibreID: 17, Field: models.CalibreAuditFieldTitle,
