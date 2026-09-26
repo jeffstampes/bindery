@@ -200,9 +200,11 @@ with batches of 50. Deleted books are filtered in the write statement rather
 than aborting the pass. Audits and reconciliations sharing one service instance
 are serialized so a slower pass cannot replace newer findings. Space and work
 are linear in library size, stored evidence and finding count, not per-book
-database queries. The existing #5 reconciliation path still calls `GetBook`
-while revalidating prior matches; that earlier matching behavior is unchanged
-by the audit. The standalone `Audit` method avoids that path entirely.
+database queries. Reconciliation (#16) bulk-loads a single coherent read-only
+Calibre snapshot (`AllBooks`) and revalidates both new matches and existing
+cross-references using the in-memory `LibraryIndex` snapshot without any
+per-reference Calibre reads (`GetBook` / `FindByIdentifier`). The standalone `Audit`
+method shares that same single-snapshot model.
 
 ### Review queue (#7)
 

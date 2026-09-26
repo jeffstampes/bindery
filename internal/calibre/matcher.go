@@ -601,7 +601,7 @@ func MatchWork(ctx context.Context, book *models.Book, authLib AuthoritativeLibr
 }
 
 // RevalidateCrossReference checks whether a persisted cross-reference is still valid.
-// It returns the updated cross-reference, a boolean indicating if it is stale, and any error.
+// It bulk-loads the Calibre library snapshot and delegates to RevalidateCrossReferenceWithIndex.
 func RevalidateCrossReference(ctx context.Context, ref *models.CalibreWorkCrossReference, book *models.Book, authLib AuthoritativeLibrary) (*models.CalibreWorkCrossReference, bool, error) {
 	if ref == nil {
 		return nil, false, errors.New("nil cross reference")
@@ -610,17 +610,34 @@ func RevalidateCrossReference(ctx context.Context, ref *models.CalibreWorkCrossR
 		return nil, false, errors.New("nil authoritative library")
 	}
 
+	allBooks, err := authLib.AllBooks(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("load all books for revalidation: %w", err)
+	}
+
+	idx := NewLibraryIndex(allBooks)
+	return RevalidateCrossReferenceWithIndex(ctx, ref, book, idx)
+}
+
+// RevalidateCrossReferenceWithIndex checks whether a persisted cross-reference is still valid
+// using a pre-built LibraryIndex (in-memory bulk snapshot).
+// It performs no per-reference I/O or calls against an external Calibre reader.
+func RevalidateCrossReferenceWithIndex(ctx context.Context, ref *models.CalibreWorkCrossReference, book *models.Book, idx *LibraryIndex) (*models.CalibreWorkCrossReference, bool, error) {
+	if ref == nil {
+		return nil, false, errors.New("nil cross reference")
+	}
+	if idx == nil {
+		return nil, false, errors.New("nil library index")
+	}
+
 	updated := *ref
 
-	// Persisted ambiguous results must not look up Calibre ID 0. Rerun matching instead.
+	// Persisted ambiguous results must not look up Calibre ID 0. Rerun matching instead against the index.
 	if ref.Status == models.CalibreMatchStatusAmbiguous || ref.CalibreID == 0 {
 		if book == nil {
 			return &updated, false, nil
 		}
-		matchRes, err := MatchWork(ctx, book, authLib)
-		if err != nil {
-			return nil, false, fmt.Errorf("re-match work for ambiguous reference: %w", err)
-		}
+		matchRes := idx.MatchWork(book)
 
 		switch matchRes.Status {
 		case models.CalibreMatchStatusMatched:
@@ -646,7 +663,11 @@ func RevalidateCrossReference(ctx context.Context, ref *models.CalibreWorkCrossR
 				detailsJSON = newRef.MatchDetailsJSON
 				matchMethod = newRef.MatchMethod
 			}
+			updated.CalibreID = 0
+			updated.CalibreFingerprint = ""
 			updated.MatchMethod = matchMethod
+			updated.Confidence = models.CalibreMatchConfidenceAmbiguous
+			updated.Status = models.CalibreMatchStatusAmbiguous
 			updated.MatchDetailsJSON = detailsJSON
 			return &updated, false, nil
 
@@ -657,55 +678,50 @@ func RevalidateCrossReference(ctx context.Context, ref *models.CalibreWorkCrossR
 		}
 	}
 
-	// 1. Check if Calibre book still exists (for matched cross-references with CalibreID > 0)
-	cb, err := authLib.GetBook(ctx, ref.CalibreID)
-	if err != nil {
-		if errors.Is(err, ErrBookNotFound) {
-			updated.Status = models.CalibreMatchStatusStale
-			updated.MatchDetailsJSON = `{"stale_reason":"calibre book no longer exists"}`
-			return &updated, true, nil
-		}
-		return nil, false, fmt.Errorf("get calibre book %d: %w", ref.CalibreID, err)
+	// 1. Check if Calibre book still exists in the in-memory index (for matched cross-references with CalibreID > 0)
+	cb, exists := idx.GetBook(ref.CalibreID)
+	if !exists {
+		updated.Status = models.CalibreMatchStatusStale
+		updated.MatchDetailsJSON = `{"stale_reason":"calibre book no longer exists"}`
+		return &updated, true, nil
 	}
 
-	// 2. Compute current fingerprint
+	// 2. Compute current fingerprint from the in-memory snapshot
 	currentFP := CalculateFingerprint(cb)
 	if currentFP == ref.CalibreFingerprint {
 		// No material change
 		return &updated, false, nil
 	}
 
-	// 3. Metadata changed in Calibre — re-run matcher if book is available
+	// 3. Metadata changed in Calibre — re-run matcher against index if book is available
 	if book != nil {
-		matchRes, err := MatchWork(ctx, book, authLib)
-		if err == nil {
-			if matchRes.Status == models.CalibreMatchStatusMatched && matchRes.CalibreID == ref.CalibreID {
-				// Still matches the same Calibre book! Update fingerprint and details.
-				updated.CalibreFingerprint = currentFP
-				updated.MatchMethod = matchRes.MatchMethod
-				updated.Confidence = matchRes.Confidence
-				updated.Status = models.CalibreMatchStatusMatched
-				updated.MatchDetailsJSON = matchRes.ToCrossReference().MatchDetailsJSON
-				return &updated, false, nil
-			} else if matchRes.Status == models.CalibreMatchStatusMatched && matchRes.CalibreID != ref.CalibreID {
-				// Matches a different Calibre book
-				updated.CalibreID = matchRes.CalibreID
-				updated.CalibreFingerprint = matchRes.CalibreFingerprint
-				updated.MatchMethod = matchRes.MatchMethod
-				updated.Confidence = matchRes.Confidence
-				updated.Status = models.CalibreMatchStatusMatched
-				updated.MatchDetailsJSON = matchRes.ToCrossReference().MatchDetailsJSON
-				return &updated, false, nil
-			} else if matchRes.Status == models.CalibreMatchStatusAmbiguous {
-				// Now ambiguous
-				updated.CalibreID = 0
-				updated.CalibreFingerprint = ""
-				updated.MatchMethod = matchRes.MatchMethod
-				updated.Confidence = matchRes.Confidence
-				updated.Status = models.CalibreMatchStatusAmbiguous
-				updated.MatchDetailsJSON = matchRes.ToCrossReference().MatchDetailsJSON
-				return &updated, false, nil
-			}
+		matchRes := idx.MatchWork(book)
+		if matchRes.Status == models.CalibreMatchStatusMatched && matchRes.CalibreID == ref.CalibreID {
+			// Still matches the same Calibre book! Update fingerprint and details.
+			updated.CalibreFingerprint = currentFP
+			updated.MatchMethod = matchRes.MatchMethod
+			updated.Confidence = matchRes.Confidence
+			updated.Status = models.CalibreMatchStatusMatched
+			updated.MatchDetailsJSON = matchRes.ToCrossReference().MatchDetailsJSON
+			return &updated, false, nil
+		} else if matchRes.Status == models.CalibreMatchStatusMatched && matchRes.CalibreID != ref.CalibreID {
+			// Matches a different Calibre book
+			updated.CalibreID = matchRes.CalibreID
+			updated.CalibreFingerprint = matchRes.CalibreFingerprint
+			updated.MatchMethod = matchRes.MatchMethod
+			updated.Confidence = matchRes.Confidence
+			updated.Status = models.CalibreMatchStatusMatched
+			updated.MatchDetailsJSON = matchRes.ToCrossReference().MatchDetailsJSON
+			return &updated, false, nil
+		} else if matchRes.Status == models.CalibreMatchStatusAmbiguous {
+			// Now ambiguous
+			updated.CalibreID = 0
+			updated.CalibreFingerprint = ""
+			updated.MatchMethod = matchRes.MatchMethod
+			updated.Confidence = matchRes.Confidence
+			updated.Status = models.CalibreMatchStatusAmbiguous
+			updated.MatchDetailsJSON = matchRes.ToCrossReference().MatchDetailsJSON
+			return &updated, false, nil
 		}
 	}
 
