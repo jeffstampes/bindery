@@ -539,7 +539,8 @@ func main() {
 		}
 	}
 
-	authoritativeService := calibre.NewAuthoritativeService(settingsRepo, calibreCrossRefRepo, bookRepo).WithEditions(editionRepo)
+	authoritativeService := calibre.NewAuthoritativeService(settingsRepo, calibreCrossRefRepo, bookRepo).
+		WithEditions(editionRepo).WithAudit(db.NewCalibreAuditRepo(database))
 	calibreImporter.WithAuthoritativeService(authoritativeService)
 
 	if authoritativeService.IsEnabled(ctxBoot) {

@@ -93,11 +93,11 @@ Separate from all of the above, and it works alongside any topology: **Library i
 
 ### Authoritative-library mode (opt in, off by default)
 
-Library import copies Calibre's books into Bindery's catalogue, so an owned book ends up described in two places by two tools. If Calibre or CWA is already your curated source of truth, **Calibre is authoritative for owned books** (`calibre.authoritative_library_enabled`, on the Calibre tab) records operator intent for Calibre/CWA to own the metadata of books it holds. Authoritative mode is designed to read `metadata.db` read-only, while Bindery keeps owning monitoring, wanted books, external catalogue metadata and acquisition. Live owned-library reading, matching, and owned-state integration arrive in later slices; enabling the setting today records this configuration only and does not yet change catalogue or ownership behavior.
+Library import copies Calibre's books into Bindery's catalogue, so an owned book ends up described in two places by two tools. If Calibre or CWA is already your curated source of truth, **Calibre is authoritative for owned books** (`calibre.authoritative_library_enabled`, on the Calibre tab) instead reads the live `metadata.db` read-only. Bindery keeps monitoring, wanted books, external catalogue metadata and acquisition; a confident external-work match satisfies ebook ownership without importing an owned book as a second catalogue row. Reconciliation also stores advisory comparisons between Calibre and Bindery's current stored provider evidence for later human review.
 
 - **It is off by default and changes nothing while off.** The write integration, the CWA mirror, library import and the drop folder all behave exactly as described above.
-- **It needs a Calibre library path.** Authoritative mode is designed to read `metadata.db` out of it, so turning the mode on without **Library path** set is refused, and clearing the path while the mode is on is refused. Turning the mode off is always allowed.
-- **Right now it only records the choice.** Owned-book matching, owned-state reconciliation and the metadata audit are later work; nothing in the catalogue changes when you enable it today.
+- **It needs a Calibre library path.** Turning the mode on without **Library path** set is refused, and clearing the path while the mode is on is refused. Turning the mode off is always allowed.
+- **Audit is backend-only for now.** It records unresolved, ignored, resolved and unmatched findings in Bindery's database; the review UI is a separate planned slice. It never corrects or tags Calibre metadata.
 
 The authority boundary, the read-only rule, what Bindery may persist about a match, and the limits planned for the audit and any future write back are recorded in [`docs/design/calibre-authoritative-library.md`](design/calibre-authoritative-library.md).
 

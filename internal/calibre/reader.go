@@ -57,7 +57,8 @@ type CalibreBook struct {
 	SortTitle   string
 	PublishDate *time.Time
 	ISBN        string
-	Language    string // ISO 639-2 code from Calibre's languages table; empty if unset
+	Language    string   // primary ISO 639-2 code; empty if unset
+	Languages   []string // all Calibre language codes, in item order (bulk snapshots)
 	Authors     []CalibreAuthor
 	Series      *CalibreSeries
 	Formats     []CalibreFormat
@@ -634,6 +635,17 @@ func (r *Reader) FindByIdentifier(ctx context.Context, idType, idVal string) ([]
 // avoiding per-book N+1 roundtrips. This is designed for high performance
 // on large (~80,000 book) libraries.
 func (r *Reader) AllBooks(ctx context.Context) ([]CalibreBook, error) {
+	return r.allBooks(ctx, true)
+}
+
+// AllBooksMetadata reads the same bulk SQL snapshot without probing every
+// book's cover file. Advisory audits do not use cover paths, and a remote
+// library's per-book filesystem stats would dominate the database read.
+func (r *Reader) AllBooksMetadata(ctx context.Context) ([]CalibreBook, error) {
+	return r.allBooks(ctx, false)
+}
+
+func (r *Reader) allBooks(ctx context.Context, includeCovers bool) ([]CalibreBook, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("reader is nil or closed")
 	}
@@ -676,10 +688,15 @@ func (r *Reader) AllBooks(ctx context.Context) ([]CalibreBook, error) {
 		} else {
 			headers[i].Identifiers = make(map[string]string)
 		}
-		headers[i].Language = languagesMap[id]
+		if languages := languagesMap[id]; len(languages) > 0 {
+			headers[i].Language = languages[0]
+			headers[i].Languages = languages
+		}
 
-		if cover := filepath.Join(headers[i].LibraryPath, "cover.jpg"); fileExists(cover) {
-			headers[i].CoverPath = cover
+		if includeCovers {
+			if cover := filepath.Join(headers[i].LibraryPath, "cover.jpg"); fileExists(cover) {
+				headers[i].CoverPath = cover
+			}
 		}
 	}
 
@@ -805,7 +822,7 @@ func (r *Reader) loadAllIdentifiers(ctx context.Context) (map[int64]map[string]s
 	return out, rows.Err()
 }
 
-func (r *Reader) loadAllLanguages(ctx context.Context) (map[int64]string, error) {
+func (r *Reader) loadAllLanguages(ctx context.Context) (map[int64][]string, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT bll.book, l.lang_code
 		FROM books_languages_link bll
@@ -813,13 +830,13 @@ func (r *Reader) loadAllLanguages(ctx context.Context) (map[int64]string, error)
 		ORDER BY bll.book, bll.item_order`)
 	if err != nil {
 		if strings.Contains(err.Error(), "no such table") {
-			return make(map[int64]string), nil
+			return make(map[int64][]string), nil
 		}
 		return nil, fmt.Errorf("load all languages: %w", err)
 	}
 	defer rows.Close()
 
-	out := make(map[int64]string)
+	out := make(map[int64][]string)
 	for rows.Next() {
 		var (
 			bookID int64
@@ -828,9 +845,7 @@ func (r *Reader) loadAllLanguages(ctx context.Context) (map[int64]string, error)
 		if err := rows.Scan(&bookID, &lang); err != nil {
 			return nil, fmt.Errorf("scan language: %w", err)
 		}
-		if _, exists := out[bookID]; !exists {
-			out[bookID] = lang
-		}
+		out[bookID] = append(out[bookID], lang)
 	}
 	return out, rows.Err()
 }
