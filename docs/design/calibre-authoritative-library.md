@@ -143,7 +143,7 @@ backend metadata audit. It creates no Calibre-backed catalogue book. The
 review UI never edits curated metadata; optional #8 tag management is the
 sole sanctioned write-back exception.
 
-### Author detail and Search wanted (#18)
+### Author detail, Search wanted, and book detail (#18, #20)
 
 Author-scoped book-list responses expose aggregate `effectiveStatus` when all
 requested formats are satisfied and, for non-skipped dual-format works,
@@ -158,6 +158,17 @@ The author bulk-search endpoint independently applies the same batched
 `FilterWantedBooks` ownership check before dispatch, even if a client posts a
 search without using the UI. With the opt-in off, no effective statuses are
 projected and searches keep their previous behavior.
+
+`GET /api/v1/book/{id}` projects those **same** response-only fields for a
+single work, using an indexed cross-reference lookup instead of the author
+list's bulk match map. Book detail uses the effective aggregate for its status
+badge, and distinguishes an ebook satisfied in Calibre/CWA from an actual
+Bindery file in the File section. An ebook-only match with no Bindery file
+reads as owned in Calibre/CWA with no local path, download, or delete action;
+a dual-format work also shows the audiobook's independent missing/local-file
+state. File paths, `bookFiles`, and persisted `status` are never synthesized or
+updated by this projection. When the opt-in is off the detail response and
+presentation retain their existing stored-status behavior.
 
 ### Backend metadata audit (#6)
 

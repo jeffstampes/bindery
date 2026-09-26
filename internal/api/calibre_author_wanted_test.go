@@ -215,6 +215,132 @@ func TestAuthorDetailAndSearch_AuthoritativeOwnership(t *testing.T) {
 	})
 }
 
+func TestBookDetail_AuthoritativeEffectiveStatus(t *testing.T) {
+	database, err := db.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	ctx := context.Background()
+	settings := db.NewSettingsRepo(database)
+	for key, value := range map[string]string{
+		"calibre.authoritative_library_enabled": "true",
+		"calibre.library_path":                  "/configured/calibre",
+	} {
+		if err := settings.Set(ctx, key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	books := db.NewBookRepo(database)
+	refs := db.NewCalibreCrossReferenceRepo(database)
+	authors := db.NewAuthorRepo(database)
+	author := &models.Author{ForeignID: "OL_DETAIL_AUTHOR", Name: "Detail Author", Monitored: true}
+	if err := authors.Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	h := NewBookHandler(books, nil, nil, nil).WithAuthoritativeService(calibre.NewAuthoritativeService(settings, refs, books))
+
+	create := func(title, mediaType, status string, matched bool, ebookPath, audioPath, legacyPath string) *models.Book {
+		t.Helper()
+		b := &models.Book{
+			ForeignID: title, Title: title, SortTitle: title, AuthorID: author.ID,
+			MediaType: mediaType, Status: status, Monitored: true, Genres: []string{},
+		}
+		if err := books.Create(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+		if ebookPath != "" {
+			if err := books.AddBookFile(ctx, b.ID, models.MediaTypeEbook, ebookPath); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if audioPath != "" {
+			if err := books.AddBookFile(ctx, b.ID, models.MediaTypeAudiobook, audioPath); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if legacyPath != "" {
+			b.FilePath = legacyPath
+			if err := books.Update(ctx, b); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if matched {
+			if err := refs.UpsertCrossReference(ctx, &models.CalibreWorkCrossReference{
+				BookID: b.ID, CalibreID: b.ID, MatchMethod: "identifier:isbn",
+				Confidence: models.CalibreMatchConfidenceExact, Status: models.CalibreMatchStatusMatched,
+				CalibreFingerprint: "test",
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return b
+	}
+
+	tests := []struct {
+		name, mediaType, status          string
+		matched                          bool
+		ebookPath, audioPath, legacyPath string
+		wantStatus, wantEbook, wantAudio string
+	}{
+		{name: "CWA ebook", mediaType: models.MediaTypeEbook, status: models.BookStatusWanted, matched: true, wantStatus: models.BookStatusImported},
+		{name: "ordinary wanted", mediaType: models.MediaTypeEbook, status: models.BookStatusWanted},
+		{name: "local ebook", mediaType: models.MediaTypeEbook, status: models.BookStatusWanted, ebookPath: "/local/book.epub", wantStatus: models.BookStatusImported},
+		{name: "legacy ebook", mediaType: models.MediaTypeEbook, status: models.BookStatusWanted, legacyPath: "/local/old.epub", wantStatus: models.BookStatusImported},
+		{name: "audio match cannot satisfy audio", mediaType: models.MediaTypeAudiobook, status: models.BookStatusWanted, matched: true},
+		{name: "dual missing audio", mediaType: models.MediaTypeBoth, status: models.BookStatusWanted, matched: true, wantEbook: models.BookStatusImported, wantAudio: models.BookStatusWanted},
+		{name: "dual satisfied", mediaType: models.MediaTypeBoth, status: models.BookStatusWanted, matched: true, audioPath: "/local/book.m4b", wantStatus: models.BookStatusImported, wantEbook: models.BookStatusImported, wantAudio: models.BookStatusImported},
+		{name: "dual legacy path is not typed", mediaType: models.MediaTypeBoth, status: models.BookStatusWanted, legacyPath: "/local/old.epub", wantEbook: models.BookStatusWanted, wantAudio: models.BookStatusWanted},
+		{name: "skipped match stays skipped", mediaType: models.MediaTypeBoth, status: models.BookStatusSkipped, matched: true},
+	}
+	get := func(b *models.Book) models.Book {
+		t.Helper()
+		id := fmt.Sprint(b.ID)
+		rec := httptest.NewRecorder()
+		h.Get(rec, withURLParam(httptest.NewRequest(http.MethodGet, "/api/v1/book/"+id, nil), "id", id))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("book detail: %d %s", rec.Code, rec.Body.String())
+		}
+		var got models.Book
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := create(tt.name, tt.mediaType, tt.status, tt.matched, tt.ebookPath, tt.audioPath, tt.legacyPath)
+			before, err := books.GetByID(ctx, b.ID)
+			if err != nil || before == nil {
+				t.Fatalf("load stored book before detail: %+v, %v", before, err)
+			}
+			got := get(b)
+			if got.Status != before.Status || got.EffectiveStatus != tt.wantStatus ||
+				got.EffectiveEbookStatus != tt.wantEbook || got.EffectiveAudiobookStatus != tt.wantAudio {
+				t.Errorf("detail status = %q (effective %q, ebook %q, audio %q), want %q (%q, %q, %q)",
+					got.Status, got.EffectiveStatus, got.EffectiveEbookStatus, got.EffectiveAudiobookStatus,
+					before.Status, tt.wantStatus, tt.wantEbook, tt.wantAudio)
+			}
+			if got.FilePath != before.FilePath || got.EbookFilePath != before.EbookFilePath || got.AudiobookFilePath != before.AudiobookFilePath {
+				t.Errorf("detail invented/changed a file path: %+v", got)
+			}
+			stored, err := books.GetByID(ctx, b.ID)
+			if err != nil || stored == nil || stored.Status != before.Status || stored.FilePath != before.FilePath ||
+				stored.EffectiveStatus != "" || stored.EffectiveEbookStatus != "" || stored.EffectiveAudiobookStatus != "" {
+				t.Errorf("detail mutated stored book: %+v, %v", stored, err)
+			}
+		})
+	}
+	if err := settings.Set(ctx, "calibre.authoritative_library_enabled", "false"); err != nil {
+		t.Fatal(err)
+	}
+	b := create("disabled match", models.MediaTypeEbook, models.BookStatusWanted, true, "", "", "")
+	got := get(b)
+	if got.Status != models.BookStatusWanted || got.EffectiveStatus != "" || got.EffectiveEbookStatus != "" || got.EffectiveAudiobookStatus != "" {
+		t.Errorf("disabled mode projects ownership: %+v", got)
+	}
+}
+
 func TestAuthorDetailAndSearch_LargeAuthor(t *testing.T) {
 	database, err := db.OpenMemory()
 	if err != nil {
