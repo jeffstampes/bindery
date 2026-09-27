@@ -47,6 +47,12 @@ func (h *stubIntegrationHandler) Recheck(w http.ResponseWriter, _ *http.Request)
 func (h *stubIntegrationHandler) RecheckStatus(w http.ResponseWriter, _ *http.Request) {
 	h.record("recheck-status", w)
 }
+func (h *stubIntegrationHandler) Reconcile(w http.ResponseWriter, _ *http.Request) {
+	h.record("reconcile", w)
+}
+func (h *stubIntegrationHandler) ReconcileStatus(w http.ResponseWriter, _ *http.Request) {
+	h.record("reconcile-status", w)
+}
 func (h *stubIntegrationHandler) Ignore(w http.ResponseWriter, _ *http.Request) {
 	h.record("ignore", w)
 }
@@ -95,6 +101,8 @@ func TestIntegrationRoutesRequireAdmin(t *testing.T) {
 		{"calibre audit list", http.MethodGet, "/calibre/audit"},
 		{"calibre audit recheck", http.MethodPost, "/calibre/audit/recheck"},
 		{"calibre audit recheck status", http.MethodGet, "/calibre/audit/recheck/status"},
+		{"calibre reconciliation", http.MethodPost, "/calibre/reconciliation"},
+		{"calibre reconciliation status", http.MethodGet, "/calibre/reconciliation/status"},
 		{"calibre audit ignore", http.MethodPost, "/calibre/audit/1/ignore"},
 		{"calibre audit reopen", http.MethodPost, "/calibre/audit/1/reopen"},
 		{"calibre identity evidence", http.MethodGet, "/calibre/identity/1"},
@@ -139,6 +147,8 @@ func TestIntegrationRoutesAllowAdmin(t *testing.T) {
 		{http.MethodGet, "/calibre/audit", "list"},
 		{http.MethodPost, "/calibre/audit/recheck", "recheck"},
 		{http.MethodGet, "/calibre/audit/recheck/status", "recheck-status"},
+		{http.MethodPost, "/calibre/reconciliation", "reconcile"},
+		{http.MethodGet, "/calibre/reconciliation/status", "reconcile-status"},
 		{http.MethodPost, "/calibre/audit/1/ignore", "ignore"},
 		{http.MethodPost, "/calibre/audit/1/reopen", "reopen"},
 		{http.MethodGet, "/calibre/identity/1", "identity"},

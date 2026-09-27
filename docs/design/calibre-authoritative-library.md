@@ -398,6 +398,45 @@ CWA base URL. When configured, the UI links a Calibre book ID to CWA's
 infer a web URL from the ingest folder or Calibre plugin URL; unsafe or unset
 URLs hide the link. This is navigation only, not the #8 write-back feature.
 
+### Explicit operator reconciliation (#27)
+
+In authoritative-library mode, **Activity → Calibre audit → Run reconciliation**
+starts `POST /api/v1/calibre/reconciliation` (admin-only); poll
+`GET /api/v1/calibre/reconciliation/status`. This is separate from the
+existing audit-only Recheck. The accepted `202` run is tracked until process
+shutdown and does not inherit the request's cancellation; a duplicate run or
+simultaneous manual recheck gets `409`. Scheduled/startup/import passes continue
+to use the same service mutex, so the operator run cannot overlap their
+snapshot/write work, but they are not shown as manual runs. The state is
+process-local (restart resets to idle): `idle`, `running`, `completed`, `partial`
+(provider/incomplete discovery), or `failed`. A running status names the stage
+and completed stage boundaries, not a guessed percentage; errors retain any
+ownership counts already computed.
+
+The existing `Reconcile` machinery first matches/revalidates ownership from a
+single read-only Calibre snapshot, then refreshes **at most 256** stale
+Bindery-rooted identity snapshots within its two-minute provider window, then
+compares/persists advisory audit findings. The manual response reports new
+matches, revalidations, stale and unmatched works; newly collected work/evidence
+counts; a single indexed count of stored file scans for current ownership links;
+current failed, truncated, unconfigured and unattempted provider
+lookups; deferred stale works and unresolved canonical roots (or unavailable
+discovery); audit compared/current/updated counts; and
+persisted finding transitions (newly unresolved, resolved, ignored decisions
+preserved, newly historical). A failed/unconfigured lookup is **not** a negative
+match. The report is the last explicit run only, not a historical run database.
+A second unchanged run reuses fresh provider snapshots and does not rewrite
+unchanged ownership links or audit findings; ignored decisions remain intact.
+
+The explicit run does **not** invoke the optional `BinderyMismatch` tag writer,
+even if its independent opt-in is enabled. Existing scheduled/audit tag behavior
+is unchanged. It does **not** rescan any ebook files: artifact evidence is
+separately collected on demand per book through `POST /identity/{bookID}/scan`,
+and a full ~19,000-book rescan would be costly and would change the meaning of
+this bounded operation. Existing artifact rows remain available on per-book
+identity reads; the run summary reports only newly collected provider evidence.
+No Calibre/CWA curated field or ebook file is modified.
+
 ### Optional audit-tag write-back (#8)
 
 `calibre.audit_tag_write_enabled` defaults to `false` independently of

@@ -204,6 +204,44 @@ export interface CalibreAuditRecheckStatus {
   error?: string
 }
 
+export interface CalibreReconciliationResult {
+  totalCalibreBooks: number
+  totalBinderyBooks: number
+  matched: number
+  revalidated: number
+  stale: number
+  unmatched: number
+  artifactScansCached: number
+  identity?: {
+    refreshedWorks: number
+    evidenceRecords: number
+    failedLookups: number
+    truncatedLookups: number
+    unconfiguredLookups: number
+    notAttemptedLookups: number
+    deferredWorks: number
+    unresolvedRoots: number
+    discoveryUnavailable: boolean
+  }
+  audit?: CalibreAuditResult
+  transitions?: {
+    newUnresolved: number
+    resolved: number
+    ignoredPreserved: number
+    becameHistorical: number
+  }
+}
+
+export interface CalibreReconciliationStatus {
+  state: 'idle' | 'running' | 'completed' | 'partial' | 'failed'
+  stage?: 'ownership' | 'identity' | 'audit'
+  completedStages: string[]
+  startedAt?: string
+  finishedAt?: string
+  result?: CalibreReconciliationResult
+  error?: string
+}
+
 export const calibreApi = {
   // Calibre
   testCalibre: () => request<CalibreTestResult>('/calibre/test', { method: 'POST' }),
@@ -225,4 +263,6 @@ export const calibreApi = {
   calibreAuditIdentity: (bookId: number) => request<CalibreIdentitySnapshot>(`/calibre/identity/${bookId}`),
   calibreAuditRecheck: () => request<CalibreAuditRecheckStatus>('/calibre/audit/recheck', { method: 'POST' }),
   calibreAuditRecheckStatus: () => request<CalibreAuditRecheckStatus>('/calibre/audit/recheck/status'),
+  calibreReconcile: () => request<CalibreReconciliationStatus>('/calibre/reconciliation', { method: 'POST' }),
+  calibreReconcileStatus: () => request<CalibreReconciliationStatus>('/calibre/reconciliation/status'),
 }

@@ -42,8 +42,9 @@ type CalibreAuditHandler struct {
 	findings *db.CalibreAuditRepo
 	jobs     *jobs.Group
 
-	mu      sync.Mutex
-	recheck CalibreAuditRecheckStatus
+	mu        sync.Mutex
+	recheck   CalibreAuditRecheckStatus
+	reconcile CalibreReconciliationStatus
 }
 
 func NewCalibreAuditHandler(service calibreAuditService, findings *db.CalibreAuditRepo) *CalibreAuditHandler {
@@ -258,6 +259,12 @@ func (h *CalibreAuditHandler) Recheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.mu.Lock()
+	if h.reconcile.State == "running" {
+		status := h.reconciliationStatus()
+		h.mu.Unlock()
+		writeJSON(w, http.StatusConflict, status)
+		return
+	}
 	if h.recheck.Running {
 		status := h.recheck
 		h.mu.Unlock()

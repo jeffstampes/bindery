@@ -302,7 +302,7 @@ func TestIdentityEvidenceBoundedConcurrentWorks(t *testing.T) {
 	stub := &concurrentIdentityStub{}
 	repo := db.NewCalibreIdentityRepo(database)
 	svc := NewAuthoritativeService(settings, nil, nil).WithIdentityEvidence(repo, stub)
-	all, err := svc.refreshIdentity(ctx, refs, books, NewLibraryIndex(calibreBooks))
+	all, err := svc.refreshIdentity(ctx, refs, books, NewLibraryIndex(calibreBooks), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

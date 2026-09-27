@@ -54,6 +54,19 @@ func (r *CalibreArtifactRepo) ReplaceForBook(ctx context.Context, bookID, calibr
 	return nil
 }
 
+// CountCurrent counts cached file scans attached to presently matched Calibre
+// links in one indexed query. It never reads or rescans artifact contents.
+func (r *CalibreArtifactRepo) CountCurrent(ctx context.Context) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM calibre_artifact_scans s
+		JOIN calibre_work_cross_references r ON r.book_id = s.book_id
+			AND r.calibre_id = s.calibre_id AND r.status = 'matched'`).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count current calibre artifact scans: %w", err)
+	}
+	return count, nil
+}
+
 // ListByBookID is indexed by its leading book_id; a detail read never walks
 // all files in a large library. Older Calibre links are excluded by ID.
 func (r *CalibreArtifactRepo) ListByBookID(ctx context.Context, bookID, calibreID int64) ([]models.CalibreArtifactScan, error) {
