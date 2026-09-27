@@ -40,8 +40,8 @@ func (r *CalibreAuditRepo) List(ctx context.Context) ([]models.CalibreAuditFindi
 // CalibreAuditListOpts selects a bounded review page. Empty filters mean all
 // states/types; callers validate the enum values before passing them here.
 type CalibreAuditListOpts struct {
-	State, FindingType, Assessment string
-	Limit, Offset                  int
+	State, FindingType, Assessment, IdentifierScope string
+	Limit, Offset                                   int
 }
 
 // ListPage reads only the requested findings, with a stable newest-first order.
@@ -60,6 +60,15 @@ func (r *CalibreAuditRepo) ListPage(ctx context.Context, opts CalibreAuditListOp
 	if opts.Assessment != "" {
 		where = append(where, "f.assessment = ?")
 		args = append(args, opts.Assessment)
+	}
+	// Review taxonomy only: these keys compare provider ebook-edition identifiers.
+	// In particular, a Calibre ASIN may describe another format; filtering it
+	// here does not assert which edition is owned or change identity confidence.
+	switch opts.IdentifierScope {
+	case "work":
+		where = append(where, "f.field = 'identifiers' AND f.evidence_key NOT IN ('isbn', 'asin', 'openlibrary_edition')")
+	case "edition":
+		where = append(where, "f.field = 'identifiers' AND f.evidence_key IN ('isbn', 'asin', 'openlibrary_edition')")
 	}
 	filter := ""
 	if len(where) > 0 {
@@ -89,7 +98,55 @@ func (r *CalibreAuditRepo) ListPage(ctx context.Context, opts CalibreAuditListOp
 	}
 	defer rows.Close()
 	findings, err := scanCalibreAuditFindings(rows, true)
-	return findings, total, err
+	// OpenMemory and production both use a single connection. Release it before
+	// loading decision history on that same connection.
+	if closeErr := rows.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return nil, 0, fmt.Errorf("read calibre audit page: %w", err)
+	}
+	if err := r.loadAuditDecisions(ctx, findings); err != nil {
+		return nil, 0, err
+	}
+	return findings, total, nil
+}
+
+// loadAuditDecisions reads review history only for the bounded displayed page.
+func (r *CalibreAuditRepo) loadAuditDecisions(ctx context.Context, findings []models.CalibreAuditFinding) error {
+	if len(findings) == 0 {
+		return nil
+	}
+	placeholders := make([]string, len(findings))
+	args := make([]any, len(findings))
+	byID := make(map[int64]*models.CalibreAuditFinding, len(findings))
+	for i := range findings {
+		placeholders[i] = "?"
+		args[i] = findings[i].ID
+		byID[findings[i].ID] = &findings[i]
+	}
+	// The IN clause consists only of bounded, generated placeholders.
+	//nolint:gosec // G202: only fixed SQL and generated ? placeholders are concatenated, never user input.
+	rows, err := r.db.QueryContext(ctx, `SELECT finding_id, action, comparison_fingerprint, created_at
+		FROM calibre_audit_decisions WHERE finding_id IN (`+strings.Join(placeholders, ",")+`) ORDER BY id`, args...)
+	if err != nil {
+		return fmt.Errorf("list calibre audit decisions: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var findingID int64
+		var decision models.CalibreAuditDecision
+		var created string
+		if err := rows.Scan(&findingID, &decision.Action, &decision.ComparisonFingerprint, &created); err != nil {
+			return fmt.Errorf("scan calibre audit decision: %w", err)
+		}
+		decision.CreatedAt = parseDBTime(created)
+		byID[findingID].Decisions = append(byID[findingID].Decisions, decision)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate calibre audit decisions: %w", err)
+	}
+	return nil
 }
 
 func scanCalibreAuditFindings(rows *sql.Rows, withTitle bool) ([]models.CalibreAuditFinding, error) {
@@ -149,32 +206,60 @@ func (r *CalibreAuditRepo) ActionableCalibreIDs(ctx context.Context) (map[int64]
 }
 
 // Ignore records a human decision for exactly the comparison the reviewer saw.
-// A stale fingerprint or non-unresolved finding is not ignored. No metadata is
-// changed, and Apply will reopen it when materially compared values change.
+// A stale fingerprint or non-unresolved finding is not ignored.
 func (r *CalibreAuditRepo) Ignore(ctx context.Context, id int64, fingerprint string) (bool, error) {
+	return r.reviewDecision(ctx, id, fingerprint, models.CalibreAuditUnresolved, models.CalibreAuditIgnored, "ignore")
+}
+
+// Reopen explicitly returns an ignored, currently comparable finding to review.
+// Its prior ignore remains in the append-only history; an audit cannot restore
+// the ignore after this transition because the ignored fingerprint is cleared.
+func (r *CalibreAuditRepo) Reopen(ctx context.Context, id int64, fingerprint string) (bool, error) {
+	return r.reviewDecision(ctx, id, fingerprint, models.CalibreAuditIgnored, models.CalibreAuditUnresolved, "reopen")
+}
+
+func (r *CalibreAuditRepo) reviewDecision(ctx context.Context, id int64, fingerprint, from, to, action string) (bool, error) {
 	if id <= 0 || fingerprint == "" {
 		return false, nil
 	}
-	res, err := r.db.ExecContext(ctx, `
-		UPDATE calibre_metadata_audit_findings
-		SET state = ?, ignored_fingerprint = comparison_fingerprint, updated_at = ?
-		WHERE id = ? AND comparison_fingerprint = ? AND state = ?`,
-		models.CalibreAuditIgnored, timeValueArg(time.Now().UTC()), id, fingerprint,
-		models.CalibreAuditUnresolved)
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, fmt.Errorf("ignore calibre audit finding %d: %w", id, err)
+		return false, fmt.Errorf("begin calibre audit %s: %w", action, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := timeValueArg(time.Now().UTC())
+	ignored := ""
+	if action == "ignore" {
+		ignored = fingerprint
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE calibre_metadata_audit_findings
+		SET state = ?, ignored_fingerprint = ?, updated_at = ?
+		WHERE id = ? AND comparison_fingerprint = ? AND state = ?`,
+		to, ignored, now, id, fingerprint, from)
+	if err != nil {
+		return false, fmt.Errorf("%s calibre audit finding %d: %w", action, id, err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return false, fmt.Errorf("ignore calibre audit finding %d rows affected: %w", id, err)
+		return false, fmt.Errorf("%s calibre audit finding %d rows affected: %w", action, id, err)
 	}
-	return n == 1, nil
+	if n != 1 {
+		return false, nil
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO calibre_audit_decisions
+		(finding_id, action, comparison_fingerprint, created_at) VALUES (?, ?, ?, ?)`, id, action, fingerprint, now); err != nil {
+		return false, fmt.Errorf("record calibre audit %s decision %d: %w", action, id, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit calibre audit %s decision %d: %w", action, id, err)
+	}
+	return true, nil
 }
 
 // Apply batches a complete pass's changed findings into one transaction and
-// returns the number actually written. The conflict rule preserves an ignore
-// only for the same comparison fingerprint, including after a temporary
-// unmatch; it never suppresses changed evidence or a new owned match.
+// returns the number actually written. It preserves an ignored finding for the
+// same owned book across evidence refreshes, including temporary unmatches;
+// only a reviewer can reopen it. A different Calibre book is a new comparison.
 func (r *CalibreAuditRepo) Apply(ctx context.Context, findings []models.CalibreAuditFinding) (int, error) {
 	if len(findings) == 0 {
 		return 0, nil
@@ -239,15 +324,19 @@ func (r *CalibreAuditRepo) Apply(ctx context.Context, findings []models.CalibreA
 			comparison_fingerprint = excluded.comparison_fingerprint,
 			state = CASE
 				WHEN excluded.state = 'unresolved'
-				 AND calibre_metadata_audit_findings.ignored_fingerprint = excluded.comparison_fingerprint
 				 AND calibre_metadata_audit_findings.calibre_id = excluded.calibre_id
+				 AND (calibre_metadata_audit_findings.state = 'ignored'
+				      OR (calibre_metadata_audit_findings.state = 'unmatched'
+				          AND calibre_metadata_audit_findings.ignored_fingerprint <> ''))
 				 THEN 'ignored'
 				ELSE excluded.state END,
 			ignored_fingerprint = CASE
 				WHEN excluded.state = 'unmatched' THEN calibre_metadata_audit_findings.ignored_fingerprint
 				WHEN excluded.state = 'unresolved'
-				 AND calibre_metadata_audit_findings.ignored_fingerprint = excluded.comparison_fingerprint
 				 AND calibre_metadata_audit_findings.calibre_id = excluded.calibre_id
+				 AND (calibre_metadata_audit_findings.state = 'ignored'
+				      OR (calibre_metadata_audit_findings.state = 'unmatched'
+				          AND calibre_metadata_audit_findings.ignored_fingerprint <> ''))
 				 THEN calibre_metadata_audit_findings.ignored_fingerprint
 				ELSE '' END,
 			updated_at = excluded.updated_at`

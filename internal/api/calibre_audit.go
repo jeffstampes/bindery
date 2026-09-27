@@ -137,18 +137,19 @@ func (h *CalibreAuditHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	state, kind, assessment := q.Get("state"), q.Get("findingType"), q.Get("assessment")
+	state, kind, assessment, scope := q.Get("state"), q.Get("findingType"), q.Get("assessment"), q.Get("identifierScope")
 	if !auditChoice(state, "", models.CalibreAuditUnresolved, models.CalibreAuditIgnored, models.CalibreAuditResolved, models.CalibreAuditUnmatched) ||
 		!auditChoice(kind, "", models.CalibreAuditIdentifierMissing, models.CalibreAuditIdentifierConflict,
 			models.CalibreAuditTitleDifference, models.CalibreAuditAuthorDifference, models.CalibreAuditSeriesDifference,
 			models.CalibreAuditPositionDifference, models.CalibreAuditLanguageDifference, models.CalibreAuditPubDateDifference) ||
-		!auditChoice(assessment, "", models.CalibreAuditNeedsReview, models.CalibreAuditAmbiguous) {
+		!auditChoice(assessment, "", models.CalibreAuditNeedsReview, models.CalibreAuditAmbiguous) ||
+		!auditChoice(scope, "", "work", "edition") {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid audit filter"})
 		return
 	}
 	limit, offset := parseLimitOffset(r, 50, 250)
 	items, total, err := h.findings.ListPage(r.Context(), db.CalibreAuditListOpts{
-		State: state, FindingType: kind, Assessment: assessment, Limit: limit, Offset: offset,
+		State: state, FindingType: kind, Assessment: assessment, IdentifierScope: scope, Limit: limit, Offset: offset,
 	})
 	if err != nil {
 		writeServerError(w, r, err)
@@ -203,6 +204,42 @@ func (h *CalibreAuditHandler) Ignore(w http.ResponseWriter, r *http.Request) {
 	if reconciler, ok := h.service.(interface{ ReconcileAuditTags(context.Context) error }); ok {
 		if err := reconciler.ReconcileAuditTags(r.Context()); err != nil {
 			slog.Warn("calibre audit ignore: tag reconciliation failed; decision retained", "finding_id", id, "error", err)
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Reopen removes the active ignore only for the comparison the reviewer saw.
+// Historical decisions remain visible; this does not write curated metadata.
+func (h *CalibreAuditHandler) Reopen(w http.ResponseWriter, r *http.Request) {
+	if !h.available(w, r) {
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid finding id"})
+		return
+	}
+	var body struct {
+		ComparisonFingerprint string `json:"comparisonFingerprint"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ComparisonFingerprint == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "comparisonFingerprint is required"})
+		return
+	}
+	ok, err := h.findings.Reopen(r.Context(), id, body.ComparisonFingerprint)
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "finding changed or is no longer ignored; refresh the review queue"})
+		return
+	}
+	// The review decision is committed even if optional tag projection fails.
+	if reconciler, ok := h.service.(interface{ ReconcileAuditTags(context.Context) error }); ok {
+		if err := reconciler.ReconcileAuditTags(r.Context()); err != nil {
+			slog.Warn("calibre audit reopen: tag reconciliation failed; decision retained", "finding_id", id, "error", err)
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)

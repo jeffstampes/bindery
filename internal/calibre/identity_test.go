@@ -90,6 +90,27 @@ func addIdentityClaimsToCalibre(t *testing.T, root string) {
 	}
 }
 
+func TestIdentityEvidenceASINClaimDoesNotEstablishOwnedEdition(t *testing.T) {
+	asin := "B000FC1BN8"
+	book := &models.Book{ID: 7, ForeignID: "OL100W", MetadataProvider: "openlibrary"}
+	cb := &CalibreBook{CalibreID: 42, Identifiers: map[string]string{"asin": asin}}
+	raw := metadata.RawBookDiscovery{CanonicalProvider: "openlibrary", CanonicalForeignID: "OL100W",
+		Observations: []metadata.RawBookObservation{
+			{Provider: "openlibrary", Method: metadata.RawMethodExactBook, Seed: "OL100W", Outcome: metadata.RawOutcomeFound,
+				Book: &models.Book{ForeignID: "OL100W", Title: "Provider Work Title"}},
+			{Provider: "openlibrary", Method: metadata.RawMethodExactEditions, Seed: "OL100W", Outcome: metadata.RawOutcomeFound,
+				Editions: []models.Edition{{ForeignID: "OL40M", Format: "EPUB", IsEbook: true, ASIN: &asin}}},
+		}}
+	snapshot := buildIdentitySnapshot(book, cb, raw)
+	if len(snapshot.Evidence) != 2 || len(snapshot.Claims) != 1 ||
+		snapshot.Evidence[0].WorkConfidence != "exact" ||
+		len(snapshot.Evidence[1].NormalizedIdentifiers["asin"]) != 1 ||
+		snapshot.Evidence[1].NormalizedIdentifiers["asin"][0] != asin ||
+		snapshot.Evidence[1].EditionConfidence != "unresolved" || snapshot.Claims[0].Status != models.CalibreIdentityClaimAgrees {
+		t.Fatalf("matching ASIN claim must not establish owned edition confidence: %+v", snapshot)
+	}
+}
+
 func TestIdentityEvidenceReconcileCanonicalRootClaimsAndAudit(t *testing.T) {
 	f, repo, stub := identityFixture(t)
 	addIdentityClaimsToCalibre(t, f.root)

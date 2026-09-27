@@ -8,7 +8,7 @@ import en from '../i18n/locales/en.json'
 vi.mock('../api/client', async importOriginal => {
   const original = await importOriginal<typeof import('../api/client')>()
   return { ...original, api: { ...original.api,
-    calibreAudit: vi.fn(), calibreAuditIgnore: vi.fn(), calibreAuditRecheck: vi.fn(), calibreAuditRecheckStatus: vi.fn(), getSetting: vi.fn(),
+    calibreAudit: vi.fn(), calibreAuditIgnore: vi.fn(), calibreAuditReopen: vi.fn(), calibreAuditIdentity: vi.fn(), calibreAuditRecheck: vi.fn(), calibreAuditRecheckStatus: vi.fn(), getSetting: vi.fn(),
   } }
 })
 vi.mock('react-i18next', () => {
@@ -36,6 +36,11 @@ beforeEach(() => {
   vi.mocked(api.getSetting).mockResolvedValue({ key: 'cwa.web_url', value: '' })
   vi.mocked(api.calibreAudit).mockResolvedValue({ items: [finding], total: 1, limit: 50, offset: 0 })
   vi.mocked(api.calibreAuditIgnore).mockResolvedValue(undefined)
+  vi.mocked(api.calibreAuditReopen).mockResolvedValue(undefined)
+  vi.mocked(api.calibreAuditIdentity).mockResolvedValue({ bookId: 5, calibreId: 17, rootKey: 'openlibrary:OL1W', evidence: [
+    { status: 'root', workConfidence: 'canonical', editionConfidence: 'unresolved' },
+    { status: 'candidate', workConfidence: 'candidate', editionConfidence: 'candidate', editionId: 'OL4M' },
+  ] })
   vi.mocked(api.calibreAuditRecheck).mockResolvedValue({ running: true, startedAt: '2026-01-01' })
   vi.mocked(api.calibreAuditRecheckStatus).mockResolvedValue({ running: false })
 })
@@ -45,8 +50,9 @@ describe('CalibreAuditPage', () => {
     renderPage()
     expect(await screen.findByText('Owned title')).toBeInTheDocument()
     expect(screen.getAllByText('Provider title')).toHaveLength(2)
-    expect(screen.getByText(/openlibrary · OL1W/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'OL1W ↗' })).toHaveAttribute('href', 'https://openlibrary.org/works/OL1W')
     expect(screen.getByText(/Editions may differ/)).toBeInTheDocument()
+    expect(screen.getByText('Current comparison · ambiguous')).toBeInTheDocument()
     expect(screen.getAllByText('Ambiguous evidence')).toHaveLength(2)
     expect(screen.queryByRole('link', { name: /Open in CWA/ })).not.toBeInTheDocument()
   })
@@ -118,8 +124,72 @@ describe('CalibreAuditPage', () => {
     vi.mocked(api.calibreAudit).mockResolvedValue({ items: [{ ...finding, state: 'unmatched' }], total: 1, limit: 50, offset: 0 })
     renderPage()
     expect(await screen.findByText(/historical values/)).toBeInTheDocument()
+    expect(screen.getByText('Historical only · not a current mismatch')).toBeInTheDocument()
+    expect(screen.getByText('Previously recorded Calibre/CWA value')).toBeInTheDocument()
+    expect(screen.queryByText(/Why this was flagged/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Ignore this comparison' })).not.toBeInTheDocument()
     expect(await screen.findByRole('link', { name: /Open in CWA/ })).toHaveAttribute('href', 'https://cwa.example.org/root/book/17')
+  })
+
+  it('reopens an ignored finding with the current fingerprint and shows its prior decision', async () => {
+    vi.mocked(api.calibreAudit).mockResolvedValue({ items: [{ ...finding, state: 'ignored', comparisonFingerprint: 'changed',
+      decisions: [{ action: 'ignore', comparisonFingerprint: 'fp1', createdAt: '2026-01-01' }] }], total: 1, limit: 50, offset: 0 })
+    renderPage()
+    fireEvent.click(await screen.findByText('Review decision history'))
+    expect(screen.getAllByText(/Ignored ·/)).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: 'Reopen for review' }))
+    await waitFor(() => expect(api.calibreAuditReopen).toHaveBeenCalledWith(3, 'changed'))
+    expect(screen.queryByRole('button', { name: 'Ignore this comparison' })).not.toBeInTheDocument()
+  })
+
+  it('treats ASIN as edition-oriented review evidence, not a confirmed owned edition', async () => {
+    vi.mocked(api.calibreAudit).mockResolvedValue({ items: [{ ...finding, field: 'identifiers', evidenceKey: 'asin',
+      findingType: 'identifier_missing', assessment: 'ambiguous' }], total: 1, limit: 50, offset: 0 })
+    renderPage()
+    expect(await screen.findByText('Edition-oriented identifier evidence (not an edition match)')).toBeInTheDocument()
+    expect(screen.getByText(/no exact owned edition/)).toBeInTheDocument()
+    expect(api.calibreAuditIdentity).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Show work and edition evidence' }))
+    expect(await screen.findByText(/Provider work evidence: canonical. Edition evidence: not established/)).toBeInTheDocument()
+    expect(api.calibreAuditIdentity).toHaveBeenCalledWith(5)
+  })
+
+  it('links valid Calibre provider-native claims but never arbitrary identifier text', async () => {
+    vi.mocked(api.calibreAudit).mockResolvedValue({ items: [{ ...finding, field: 'identifiers', evidenceKey: 'openlibrary',
+      findingType: 'identifier_conflict', calibreEvidence: [
+        { value: 'OL12W', source: 'calibre.identifiers.openlibrary' },
+        { value: 'OL34M', source: 'calibre.identifiers.openlibrary_edition' },
+        { value: 'abc_3', source: 'calibre.identifiers.google' },
+        { value: 'hc:123', source: 'calibre.identifiers.hardcover' },
+        { value: 'javascript:alert(1)', source: 'calibre.identifiers.google' },
+      ] }], total: 1, limit: 50, offset: 0 })
+    renderPage()
+    expect(await screen.findByRole('link', { name: 'OL12W ↗' })).toHaveAttribute('href', 'https://openlibrary.org/works/OL12W')
+    expect(screen.getByRole('link', { name: 'OL34M ↗' })).toHaveAttribute('href', 'https://openlibrary.org/books/OL34M')
+    expect(screen.getByRole('link', { name: 'abc_3 ↗' })).toHaveAttribute('href', 'https://books.google.com/books?id=abc_3')
+    expect(screen.queryByRole('link', { name: 'hc:123 ↗' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /javascript/ })).not.toBeInTheDocument()
+  })
+
+  it('only links supported provider records and separates current review from historical filters', async () => {
+    vi.mocked(api.calibreAudit).mockResolvedValue({ items: [{ ...finding, field: 'identifiers', evidenceKey: 'hardcover',
+      findingType: 'identifier_missing', assessment: 'needs_review', binderyEvidence: [
+        { value: 'hc:123', source: 'books.foreign_id', provider: 'hardcover', foreignId: 'hc:123' },
+        { value: 'hc:known-slug', source: 'books.foreign_id', provider: 'hardcover', foreignId: 'hc:known-slug' },
+        { value: 'wrong', source: 'books.foreign_id', provider: 'openlibrary', foreignId: 'OL42W<script>' },
+        { value: 'gb:vol_1', source: 'book_identifiers.foreign_id', provider: 'googlebooks', foreignId: 'gb:vol_1' },
+      ] }], total: 1, limit: 50, offset: 0 })
+    renderPage()
+    expect(await screen.findByText('Work/provider identifier')).toBeInTheDocument()
+    expect(screen.getByText('Current comparison · review')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'hc:known-slug ↗' })).toHaveAttribute('href', 'https://hardcover.app/books/known-slug')
+    expect(screen.getByRole('link', { name: 'gb:vol_1 ↗' })).toHaveAttribute('href', 'https://books.google.com/books?id=vol_1')
+    expect(screen.queryByRole('link', { name: 'hc:123 ↗' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'OL42W<script> ↗' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Ambiguous editions' }))
+    await waitFor(() => expect(api.calibreAudit).toHaveBeenCalledWith(expect.objectContaining({ state: 'unresolved', assessment: 'ambiguous', identifierScope: 'edition' })))
+    fireEvent.click(screen.getByRole('button', { name: 'Historical only' }))
+    await waitFor(() => expect(api.calibreAudit).toHaveBeenCalledWith(expect.objectContaining({ state: 'unmatched', assessment: undefined, identifierScope: undefined })))
   })
 
   it('shows list and recheck errors and never emits a javascript link', async () => {

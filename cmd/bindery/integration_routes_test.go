@@ -50,6 +50,9 @@ func (h *stubIntegrationHandler) RecheckStatus(w http.ResponseWriter, _ *http.Re
 func (h *stubIntegrationHandler) Ignore(w http.ResponseWriter, _ *http.Request) {
 	h.record("ignore", w)
 }
+func (h *stubIntegrationHandler) Reopen(w http.ResponseWriter, _ *http.Request) {
+	h.record("reopen", w)
+}
 
 func (h *stubIntegrationHandler) Identity(w http.ResponseWriter, _ *http.Request) {
 	h.record("identity", w)
@@ -93,6 +96,7 @@ func TestIntegrationRoutesRequireAdmin(t *testing.T) {
 		{"calibre audit recheck", http.MethodPost, "/calibre/audit/recheck"},
 		{"calibre audit recheck status", http.MethodGet, "/calibre/audit/recheck/status"},
 		{"calibre audit ignore", http.MethodPost, "/calibre/audit/1/ignore"},
+		{"calibre audit reopen", http.MethodPost, "/calibre/audit/1/reopen"},
 		{"calibre identity evidence", http.MethodGet, "/calibre/identity/1"},
 		{"calibre artifact scan", http.MethodPost, "/calibre/identity/1/scan"},
 	}
@@ -136,6 +140,7 @@ func TestIntegrationRoutesAllowAdmin(t *testing.T) {
 		{http.MethodPost, "/calibre/audit/recheck", "recheck"},
 		{http.MethodGet, "/calibre/audit/recheck/status", "recheck-status"},
 		{http.MethodPost, "/calibre/audit/1/ignore", "ignore"},
+		{http.MethodPost, "/calibre/audit/1/reopen", "reopen"},
 		{http.MethodGet, "/calibre/identity/1", "identity"},
 	}
 	for _, tt := range tests {

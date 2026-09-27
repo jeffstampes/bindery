@@ -38,6 +38,7 @@ func TestCalibreAuditReviewRoutes(t *testing.T) {
 		r.Post("/calibre/audit/recheck", h.Recheck)
 		r.Get("/calibre/audit/recheck/status", h.RecheckStatus)
 		r.Post("/calibre/audit/{id}/ignore", h.Ignore)
+		r.Post("/calibre/audit/{id}/reopen", h.Reopen)
 		r.Get("/calibre/identity/{bookID}", h.Identity)
 	})
 	request := func(role, method, path, body string) *httptest.ResponseRecorder {
@@ -53,6 +54,7 @@ func TestCalibreAuditReviewRoutes(t *testing.T) {
 		{http.MethodPost, "/calibre/audit/recheck"},
 		{http.MethodGet, "/calibre/audit/recheck/status"},
 		{http.MethodPost, "/calibre/audit/1/ignore"},
+		{http.MethodPost, "/calibre/audit/1/reopen"},
 		{http.MethodGet, "/calibre/identity/1"},
 	} {
 		if rec := request("user", route.method, route.path, ""); rec.Code != http.StatusForbidden {
@@ -114,6 +116,9 @@ func TestCalibreAuditReviewRoutes(t *testing.T) {
 	if rec := request("admin", http.MethodGet, "/calibre/audit?findingType=invalid", ""); rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad filter: %d", rec.Code)
 	}
+	if rec := request("admin", http.MethodGet, "/calibre/audit?identifierScope=invalid", ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad identifier scope: %d", rec.Code)
+	}
 	rec := request("admin", http.MethodGet, "/calibre/audit?state=unresolved&assessment=ambiguous&limit=1", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list: %d %s", rec.Code, rec.Body.String())
@@ -145,6 +150,24 @@ func TestCalibreAuditReviewRoutes(t *testing.T) {
 	}
 	if rec := request("admin", http.MethodGet, "/calibre/audit?state=ignored", ""); rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte(`"state":"ignored"`)) {
 		t.Fatalf("ignored state: %d %s", rec.Code, rec.Body.String())
+	}
+	reopenPath := "/calibre/audit/" + strconv.FormatInt(id, 10) + "/reopen"
+	if rec := request("admin", http.MethodPost, reopenPath, `{}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing reopen fingerprint: %d", rec.Code)
+	}
+	if rec := request("admin", http.MethodPost, reopenPath, `{"comparisonFingerprint":"stale"}`); rec.Code != http.StatusConflict {
+		t.Fatalf("stale reopen: %d", rec.Code)
+	}
+	if rec := request("admin", http.MethodPost, reopenPath, `{"comparisonFingerprint":"comparison-1"}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("reopen: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := request("admin", http.MethodPost, reopenPath, `{"comparisonFingerprint":"comparison-1"}`); rec.Code != http.StatusConflict {
+		t.Fatalf("repeat reopen: %d", rec.Code)
+	}
+	if rec := request("admin", http.MethodGet, "/calibre/audit?state=unresolved", ""); rec.Code != http.StatusOK ||
+		!bytes.Contains(rec.Body.Bytes(), []byte(`"state":"unresolved"`)) || !bytes.Contains(rec.Body.Bytes(), []byte(`"action":"ignore"`)) ||
+		!bytes.Contains(rec.Body.Bytes(), []byte(`"action":"reopen"`)) {
+		t.Fatalf("reopened review history: %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := request("admin", http.MethodGet, "/calibre/audit/recheck/status", ""); rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte(`"running":false`)) {
 		t.Fatalf("idle recheck status: %d %s", rec.Code, rec.Body.String())
