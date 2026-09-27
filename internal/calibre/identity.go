@@ -22,6 +22,21 @@ type identityDiscoverer interface {
 	DiscoverRawBookEvidence(context.Context, string, string) metadata.RawBookDiscovery
 }
 
+// IdentityRefreshResult reports newly collected evidence and the outcomes of
+// current eligible snapshots (including cached failures awaiting retry).
+// DeferredWorks are stale works not attempted within the bounded pass.
+type IdentityRefreshResult struct {
+	RefreshedWorks       int  `json:"refreshedWorks"`
+	EvidenceRecords      int  `json:"evidenceRecords"`
+	FailedLookups        int  `json:"failedLookups"`
+	TruncatedLookups     int  `json:"truncatedLookups"`
+	UnconfiguredLookups  int  `json:"unconfiguredLookups"`
+	NotAttemptedLookups  int  `json:"notAttemptedLookups"`
+	DeferredWorks        int  `json:"deferredWorks"`
+	UnresolvedRoots      int  `json:"unresolvedRoots"`
+	DiscoveryUnavailable bool `json:"discoveryUnavailable"`
+}
+
 // WithIdentityEvidence enables Bindery-rooted, read-only provider discovery.
 // The optional seam keeps ownership-only services and non-authoritative mode
 // unchanged; the repository writes only to Bindery's database.
@@ -120,7 +135,7 @@ func (s *AuthoritativeService) RefreshIdentity(ctx context.Context) error {
 		book.Identifiers, book.Editions = ids[book.ID], editions[book.ID]
 		byID[book.ID] = book
 	}
-	_, err = s.refreshIdentity(ctx, refs, byID, NewLibraryIndex(calibreBooks))
+	_, err = s.refreshIdentity(ctx, refs, byID, NewLibraryIndex(calibreBooks), nil)
 	return err
 }
 
@@ -130,9 +145,12 @@ type identityWork struct {
 }
 
 func (s *AuthoritativeService) refreshIdentity(ctx context.Context, refs []models.CalibreWorkCrossReference,
-	books map[int64]*models.Book, idx *LibraryIndex,
+	books map[int64]*models.Book, idx *LibraryIndex, stats *IdentityRefreshResult,
 ) (map[int64]models.CalibreIdentitySnapshot, error) {
 	if s.identity == nil || s.identitySource == nil || !s.IsEnabled(ctx) {
+		if stats != nil {
+			stats.DiscoveryUnavailable = true
+		}
 		return nil, nil
 	}
 	previous, err := s.identity.ListAll(ctx)
@@ -254,6 +272,43 @@ launch:
 	}
 	if err := flush(); err != nil {
 		return nil, err
+	}
+	if stats != nil {
+		for _, snapshot := range results {
+			if snapshot.BookID != 0 {
+				stats.RefreshedWorks++
+				stats.EvidenceRecords += len(snapshot.Evidence)
+			}
+		}
+		for id := range eligible {
+			snapshot, ok := previous[id]
+			if !ok || snapshot.RootKey == "" || time.Since(snapshot.CheckedAt) >= identitySnapshotTTL(snapshot) {
+				stats.DeferredWorks++
+				continue
+			}
+			rootFound := false
+			for _, evidence := range snapshot.Evidence {
+				if evidence.Status == models.CalibreIdentityRoot && evidence.Method == metadata.RawMethodExactBook {
+					rootFound = true
+					break
+				}
+			}
+			if !rootFound {
+				stats.UnresolvedRoots++
+			}
+			for _, lookup := range snapshot.Lookups {
+				switch lookup.Outcome {
+				case models.CalibreIdentityLookupFailed:
+					stats.FailedLookups++
+				case models.CalibreIdentityLookupTruncated:
+					stats.TruncatedLookups++
+				case models.CalibreIdentityLookupUnconfigured:
+					stats.UnconfiguredLookups++
+				case models.CalibreIdentityLookupNotAttempted:
+					stats.NotAttemptedLookups++
+				}
+			}
+		}
 	}
 	return previous, nil
 }

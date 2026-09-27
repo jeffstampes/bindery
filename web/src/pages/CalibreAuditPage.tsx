@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { api, ApiError, type CalibreAuditEvidence, type CalibreAuditFinding, type CalibreAuditRecheckStatus, type CalibreIdentitySnapshot } from '../api/client'
+import { api, ApiError, type CalibreAuditEvidence, type CalibreAuditFinding, type CalibreAuditRecheckStatus, type CalibreIdentitySnapshot, type CalibreReconciliationStatus } from '../api/client'
 import { metadataSourceLink, providerDisplayName } from '../util/metadataSource'
 import Pagination from '../components/Pagination'
 import { useServerPagination } from '../components/usePagination'
@@ -150,6 +150,10 @@ export default function CalibreAuditPage() {
   const [actionError, setActionError] = useState('')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<CalibreAuditRecheckStatus | null>(null)
+  const [reconciliation, setReconciliation] = useState<CalibreReconciliationStatus | null>(null)
+  const [reconciliationLoading, setReconciliationLoading] = useState(true)
+  const [reconciliationBusy, setReconciliationBusy] = useState(false)
+  const [reconciliationError, setReconciliationError] = useState('')
   const [statusLoading, setStatusLoading] = useState(true)
   const [statusError, setStatusError] = useState('')
   const [accepted, setAccepted] = useState(false)
@@ -201,6 +205,48 @@ export default function CalibreAuditPage() {
     return () => { active = false; window.clearInterval(timer) }
   }, [status?.running, refresh, t])
 
+  useEffect(() => {
+    let active = true
+    api.calibreReconcileStatus()
+      .then(next => { if (active) { setReconciliation(next); setReconciliationError('') } })
+      .catch(err => { if (active) setReconciliationError(t('calibreAudit.reconciliation.statusError', { error: err instanceof Error ? err.message : String(err) })) })
+      .finally(() => { if (active) setReconciliationLoading(false) })
+    return () => { active = false }
+  }, [t])
+
+  useEffect(() => {
+    if (reconciliation?.state !== 'running') return
+    let active = true
+    let inFlight = false
+    const timer = window.setInterval(() => {
+      if (inFlight) return
+      inFlight = true
+      api.calibreReconcileStatus()
+        .then(next => {
+          if (!active) return
+          setReconciliation(next); setReconciliationError('')
+          if (next.state !== 'running') refresh()
+        })
+        .catch(err => { if (active) setReconciliationError(t('calibreAudit.reconciliation.statusError', { error: err instanceof Error ? err.message : String(err) })) })
+        .finally(() => { inFlight = false })
+    }, 2000)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [reconciliation?.state, refresh, t])
+
+  const runReconciliation = async () => {
+    setReconciliationBusy(true); setReconciliationError('')
+    try {
+      setReconciliation(await api.calibreReconcile())
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        try { setReconciliation(await api.calibreReconcileStatus()) }
+        catch (statusErr) { setReconciliationError(t('calibreAudit.reconciliation.statusError', { error: statusErr instanceof Error ? statusErr.message : String(statusErr) })) }
+      } else {
+        setReconciliationError(t('calibreAudit.reconciliation.startError', { error: err instanceof Error ? err.message : String(err) }))
+      }
+    } finally { setReconciliationBusy(false) }
+  }
+
   const filter = (set: (s: string) => void, value: string) => { set(value); reset(); setLoading(true) }
   const quickFilter = (nextState: string, nextAssessment: string, nextScope: string) => {
     setState(nextState); setKind(''); setAssessment(nextAssessment); setIdentifierScope(nextScope); reset(); setLoading(true)
@@ -244,8 +290,27 @@ export default function CalibreAuditPage() {
   return <section className="space-y-5">
     <div className="flex flex-wrap justify-between gap-3">
       <div><h2 className="text-2xl font-bold">{t('calibreAudit.title')}</h2><p className="text-sm text-fg-muted">{t('calibreAudit.hint')}</p></div>
-      <button onClick={recheck} disabled={busy || statusLoading || !!status?.running} className="self-start rounded bg-emerald-700 text-white px-3 py-2 text-sm disabled:opacity-50">{status?.running ? t('calibreAudit.working') : t('calibreAudit.recheck')}</button>
+      <div className="flex flex-wrap gap-2">
+        <button onClick={runReconciliation} disabled={reconciliationBusy || busy || reconciliationLoading || statusLoading || reconciliation?.state === 'running' || !!status?.running} className="self-start rounded bg-emerald-700 text-white px-3 py-2 text-sm disabled:opacity-50">{reconciliation?.state === 'running' ? t('calibreAudit.reconciliation.running') : t('calibreAudit.reconciliation.run')}</button>
+        <button onClick={recheck} disabled={busy || statusLoading || reconciliationLoading || !!status?.running || reconciliation?.state === 'running'} className="self-start rounded border px-3 py-2 text-sm disabled:opacity-50">{status?.running ? t('calibreAudit.working') : t('calibreAudit.recheck')}</button>
+      </div>
     </div>
+    <p className="text-xs text-fg-muted">{t('calibreAudit.reconciliation.scope')}</p>
+    {reconciliationError && <p role="alert" className="text-red-600 dark:text-red-400">{reconciliationError}</p>}
+    {reconciliation?.state === 'running' && <p role="status">{t('calibreAudit.reconciliation.stage', { stage: t(`calibreAudit.reconciliation.stages.${reconciliation.stage ?? 'ownership'}`) })} {t('calibreAudit.reconciliation.completedStages', { stages: reconciliation.completedStages.map(s => t(`calibreAudit.reconciliation.stages.${s}`)).join(', ') || t('calibreAudit.reconciliation.none') })}</p>}
+    {reconciliation?.state === 'failed' && <p role="alert" className="text-red-600 dark:text-red-400">{t('calibreAudit.reconciliation.failed', { error: reconciliation.error })}</p>}
+    {reconciliation?.state === 'partial' && <p role="alert" className="text-amber-700 dark:text-amber-400">{t('calibreAudit.reconciliation.partial')}</p>}
+    {reconciliation && ['completed', 'partial'].includes(reconciliation.state) && <p role="status">{t('calibreAudit.reconciliation.complete')}</p>}
+    {reconciliation?.result && <div className="rounded border p-3 space-y-1 text-sm" aria-label={t('calibreAudit.reconciliation.summary')}>
+      <p>{t('calibreAudit.reconciliation.ownership', { total: reconciliation.result.totalBinderyBooks, calibre: reconciliation.result.totalCalibreBooks, matched: reconciliation.result.matched, revalidated: reconciliation.result.revalidated, stale: reconciliation.result.stale, unmatched: reconciliation.result.unmatched })}</p>
+      {reconciliation.result.identity && <>
+        <p>{t('calibreAudit.reconciliation.identity', { works: reconciliation.result.identity.refreshedWorks, records: reconciliation.result.identity.evidenceRecords })}</p>
+        <p>{t('calibreAudit.reconciliation.providers', { failed: reconciliation.result.identity.failedLookups, truncated: reconciliation.result.identity.truncatedLookups, unconfigured: reconciliation.result.identity.unconfiguredLookups, skipped: reconciliation.result.identity.notAttemptedLookups, deferred: reconciliation.result.identity.deferredWorks, unresolved: reconciliation.result.identity.unresolvedRoots, unavailable: reconciliation.result.identity.discoveryUnavailable ? t('calibreAudit.reconciliation.unavailable') : t('calibreAudit.reconciliation.available') })}</p>
+      </>}
+      <p>{t('calibreAudit.reconciliation.artifacts', { scans: reconciliation.result.artifactScansCached })}</p>
+      {reconciliation.result.audit && <p>{t('calibreAudit.reconciliation.audit', { compared: reconciliation.result.audit.comparedBooks, findings: reconciliation.result.audit.findings, updated: reconciliation.result.audit.updated })}</p>}
+      {reconciliation.result.transitions && <p>{t('calibreAudit.reconciliation.transitions', { new: reconciliation.result.transitions.newUnresolved, resolved: reconciliation.result.transitions.resolved, ignored: reconciliation.result.transitions.ignoredPreserved, historical: reconciliation.result.transitions.becameHistorical })}</p>}
+    </div>}
     <nav aria-label={t('calibreAudit.quickFilters')} className="flex flex-wrap gap-2 text-sm">
       <button onClick={() => quickFilter('unresolved', 'needs_review', '')} className="rounded border px-2 py-1">{t('calibreAudit.currentQueue')}</button>
       <button onClick={() => quickFilter('unresolved', 'ambiguous', 'edition')} className="rounded border px-2 py-1">{t('calibreAudit.editionQueue')}</button>

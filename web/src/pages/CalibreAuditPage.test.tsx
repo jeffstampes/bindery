@@ -8,7 +8,7 @@ import en from '../i18n/locales/en.json'
 vi.mock('../api/client', async importOriginal => {
   const original = await importOriginal<typeof import('../api/client')>()
   return { ...original, api: { ...original.api,
-    calibreAudit: vi.fn(), calibreAuditIgnore: vi.fn(), calibreAuditReopen: vi.fn(), calibreAuditIdentity: vi.fn(), calibreAuditRecheck: vi.fn(), calibreAuditRecheckStatus: vi.fn(), getSetting: vi.fn(),
+    calibreAudit: vi.fn(), calibreAuditIgnore: vi.fn(), calibreAuditReopen: vi.fn(), calibreAuditIdentity: vi.fn(), calibreAuditRecheck: vi.fn(), calibreAuditRecheckStatus: vi.fn(), calibreReconcile: vi.fn(), calibreReconcileStatus: vi.fn(), getSetting: vi.fn(),
   } }
 })
 vi.mock('react-i18next', () => {
@@ -43,9 +43,68 @@ beforeEach(() => {
   ] })
   vi.mocked(api.calibreAuditRecheck).mockResolvedValue({ running: true, startedAt: '2026-01-01' })
   vi.mocked(api.calibreAuditRecheckStatus).mockResolvedValue({ running: false })
+  vi.mocked(api.calibreReconcile).mockResolvedValue({ state: 'running', stage: 'ownership', completedStages: [] })
+  vi.mocked(api.calibreReconcileStatus).mockResolvedValue({ state: 'idle', completedStages: [] })
 })
 
 describe('CalibreAuditPage', () => {
+  it('runs reconciliation, shows its stage, disables both starts, and reports completion', async () => {
+    vi.mocked(api.calibreReconcileStatus).mockResolvedValueOnce({ state: 'idle', completedStages: [] })
+      .mockResolvedValueOnce({ state: 'completed', completedStages: ['ownership', 'identity', 'audit'], result: {
+        totalBinderyBooks: 7, totalCalibreBooks: 90, matched: 1, revalidated: 4, stale: 1, unmatched: 1, artifactScansCached: 3,
+        identity: { refreshedWorks: 2, evidenceRecords: 6, failedLookups: 0, truncatedLookups: 0, unconfiguredLookups: 0, notAttemptedLookups: 0, deferredWorks: 0, unresolvedRoots: 0, discoveryUnavailable: false },
+        audit: { totalCalibreBooks: 90, comparedBooks: 5, findings: 3, updated: 1 },
+        transitions: { newUnresolved: 1, resolved: 0, ignoredPreserved: 2, becameHistorical: 0 },
+      } })
+    renderPage()
+    const run = await screen.findByRole('button', { name: 'Run reconciliation' })
+    await waitFor(() => expect(run).toBeEnabled())
+    fireEvent.click(run)
+    expect(await screen.findByText(/Running: ownership matching/)).toBeInTheDocument()
+    expect(run).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Recheck library' })).toBeDisabled()
+    expect(await screen.findByText(/Ownership: 7 Bindery books/, {}, { timeout: 3500 })).toBeInTheDocument()
+    expect(screen.getByText(/2 works refreshed, 6 provider evidence records/)).toBeInTheDocument()
+    expect(screen.getByText(/3 cached file scans for current ownership links; no files rescanned/)).toBeInTheDocument()
+    expect(screen.getByText(/1 newly unresolved, 0 resolved, 2 ignored decisions preserved/)).toBeInTheDocument()
+    await waitFor(() => expect(api.calibreAudit).toHaveBeenCalledTimes(2))
+  })
+
+  it('shows partial provider outcomes as incomplete discovery, not clean success', async () => {
+    vi.mocked(api.calibreReconcileStatus).mockResolvedValue({ state: 'partial', completedStages: ['ownership', 'identity', 'audit'], result: {
+      totalBinderyBooks: 1, totalCalibreBooks: 5, matched: 0, revalidated: 1, stale: 0, unmatched: 0, artifactScansCached: 0,
+      identity: { refreshedWorks: 1, evidenceRecords: 2, failedLookups: 1, truncatedLookups: 1, unconfiguredLookups: 1, notAttemptedLookups: 0, deferredWorks: 3, unresolvedRoots: 0, discoveryUnavailable: false },
+    } })
+    renderPage()
+    expect(await screen.findByText(/Discovery was partial/)).toBeInTheDocument()
+    expect(screen.getByText(/1 failed, 1 truncated, 1 unconfigured/)).toBeInTheDocument()
+  })
+
+  it('restores a failed run and surfaces start errors without a success summary', async () => {
+    vi.mocked(api.calibreReconcileStatus).mockResolvedValue({ state: 'failed', completedStages: ['ownership'], error: 'read-only library unavailable' })
+    vi.mocked(api.calibreReconcile).mockRejectedValueOnce(new Error('worker unavailable'))
+    renderPage()
+    expect(await screen.findByText(/Reconciliation failed: read-only library unavailable/)).toBeInTheDocument()
+    const run = screen.getByRole('button', { name: 'Run reconciliation' })
+    await waitFor(() => expect(run).toBeEnabled())
+    fireEvent.click(run)
+    expect(await screen.findByText(/Could not start reconciliation: worker unavailable/)).toBeInTheDocument()
+    expect(screen.queryByText(/Reconciliation completed/)).not.toBeInTheDocument()
+  })
+
+  it('follows an existing reconciliation on conflict without starting a second job', async () => {
+    vi.mocked(api.calibreReconcile).mockRejectedValueOnce(new ApiError(409, { state: 'running' }, 'busy'))
+    vi.mocked(api.calibreReconcileStatus).mockResolvedValueOnce({ state: 'idle', completedStages: [] })
+      .mockResolvedValueOnce({ state: 'running', stage: 'identity', completedStages: ['ownership'] })
+    renderPage()
+    const run = await screen.findByRole('button', { name: 'Run reconciliation' })
+    await waitFor(() => expect(run).toBeEnabled())
+    fireEvent.click(run)
+    expect(await screen.findByText(/Running: identity evidence/)).toBeInTheDocument()
+    expect(api.calibreReconcile).toHaveBeenCalledTimes(1)
+    expect(run).toBeDisabled()
+  })
+
   it('shows owned and provider evidence separately with source, reason, and ambiguity', async () => {
     renderPage()
     expect(await screen.findByText('Owned title')).toBeInTheDocument()

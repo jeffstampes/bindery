@@ -244,13 +244,16 @@ func applyEffectiveStatus(b *models.Book, matched bool) {
 
 // ReconcileResult captures summary statistics of an authoritative reconciliation pass.
 type ReconcileResult struct {
-	TotalCalibreBooks int          `json:"totalCalibreBooks"`
-	TotalBinderyBooks int          `json:"totalBinderyBooks"`
-	Matched           int          `json:"matched"`
-	Revalidated       int          `json:"revalidated"`
-	Stale             int          `json:"stale"`
-	Unmatched         int          `json:"unmatched"`
-	Audit             *AuditResult `json:"audit,omitempty"`
+	TotalCalibreBooks   int                    `json:"totalCalibreBooks"`
+	TotalBinderyBooks   int                    `json:"totalBinderyBooks"`
+	Matched             int                    `json:"matched"`
+	Revalidated         int                    `json:"revalidated"`
+	Stale               int                    `json:"stale"`
+	Unmatched           int                    `json:"unmatched"`
+	Audit               *AuditResult           `json:"audit,omitempty"`
+	Identity            *IdentityRefreshResult `json:"identity,omitempty"`
+	Transitions         *AuditTransitions      `json:"transitions,omitempty"`
+	ArtifactScansCached int                    `json:"artifactScansCached"`
 }
 
 // Reconcile performs a full reconciliation pass between Bindery works and Calibre books
@@ -259,12 +262,29 @@ type ReconcileResult struct {
 //
 // Crucially, it NEVER imports new catalogue rows or Book entries into Bindery (Invariant 4).
 func (s *AuthoritativeService) Reconcile(ctx context.Context) (*ReconcileResult, error) {
+	return s.reconcile(ctx, nil, false)
+}
+
+// ReconcileReadOnlyWithProgress runs the existing ownership, identity and audit
+// pass without the optional Calibre mismatch-tag write-back. Stage callbacks
+// describe completed boundaries, not estimated percentages.
+func (s *AuthoritativeService) ReconcileReadOnlyWithProgress(ctx context.Context, stage func(string)) (*ReconcileResult, error) {
+	if s.audits == nil || s.editions == nil || s.crossRef == nil {
+		return nil, fmt.Errorf("calibre reconciliation requires audit, edition and cross-reference repositories")
+	}
+	return s.reconcile(ctx, stage, true)
+}
+
+func (s *AuthoritativeService) reconcile(ctx context.Context, stage func(string), readOnly bool) (*ReconcileResult, error) {
 	if !s.IsEnabled(ctx) {
 		return nil, ErrAuthoritativeDisabled
 	}
 	if s.audits != nil {
 		s.passMu.Lock()
 		defer s.passMu.Unlock()
+	}
+	if stage != nil {
+		stage("ownership")
 	}
 	libPath := s.LibraryPath(ctx)
 	if libPath == "" {
@@ -303,7 +323,7 @@ func (s *AuthoritativeService) Reconcile(ctx context.Context) (*ReconcileResult,
 		// A now-empty Bindery catalogue still needs to retire old findings
 		// and any Bindery-owned tags left on Calibre books.
 		if s.audits != nil {
-			res.Audit, err = s.auditSnapshot(ctx, calibreBooks, binderyBooks, nil, nil, NewLibraryIndex(calibreBooks))
+			res.Audit, err = s.auditSnapshot(ctx, calibreBooks, binderyBooks, nil, nil, NewLibraryIndex(calibreBooks), auditRunOptions{report: reportForRun(res, readOnly), stage: stage, applyTags: !readOnly})
 			if err != nil {
 				return res, fmt.Errorf("reconciliation completed but calibre metadata audit failed: %w", err)
 			}
@@ -352,6 +372,9 @@ func (s *AuthoritativeService) Reconcile(ctx context.Context) (*ReconcileResult,
 			// Revalidate existing reference using single in-memory snapshot index
 			updated, stale, err := RevalidateCrossReferenceWithIndex(ctx, &existingRef, b, idx)
 			if err != nil {
+				if readOnly {
+					return res, fmt.Errorf("revalidate ownership link for book %d: %w", b.ID, err)
+				}
 				slog.Warn("authoritative reconcile: revalidation failed", "book_id", b.ID, "error", err)
 				continue
 			}
@@ -360,7 +383,13 @@ func (s *AuthoritativeService) Reconcile(ctx context.Context) (*ReconcileResult,
 			} else {
 				res.Revalidated++
 			}
+			if readOnly && sameOwnershipLink(existingRef, *updated) {
+				continue
+			}
 			if err := s.crossRef.UpsertCrossReference(ctx, updated); err != nil {
+				if readOnly {
+					return res, fmt.Errorf("save ownership link for book %d: %w", b.ID, err)
+				}
 				slog.Warn("authoritative reconcile: upsert cross-reference failed", "book_id", b.ID, "error", err)
 			}
 		} else {
@@ -372,6 +401,9 @@ func (s *AuthoritativeService) Reconcile(ctx context.Context) (*ReconcileResult,
 					res.Matched++
 				}
 				if err := s.crossRef.UpsertCrossReference(ctx, ref); err != nil {
+					if readOnly {
+						return res, fmt.Errorf("save ownership link for book %d: %w", b.ID, err)
+					}
 					slog.Warn("authoritative reconcile: upsert cross-reference failed", "book_id", b.ID, "error", err)
 				}
 			} else {
@@ -384,10 +416,23 @@ func (s *AuthoritativeService) Reconcile(ctx context.Context) (*ReconcileResult,
 		if s.editions == nil {
 			return res, fmt.Errorf("calibre metadata audit requires an edition repository")
 		}
-		res.Audit, err = s.auditSnapshot(ctx, calibreBooks, binderyBooks, idMap, edMap, idx)
+		res.Audit, err = s.auditSnapshot(ctx, calibreBooks, binderyBooks, idMap, edMap, idx, auditRunOptions{report: reportForRun(res, readOnly), stage: stage, applyTags: !readOnly})
 		if err != nil {
 			return res, fmt.Errorf("reconciliation completed but calibre metadata audit failed: %w", err)
 		}
 	}
 	return res, nil
+}
+
+func sameOwnershipLink(a, b models.CalibreWorkCrossReference) bool {
+	return a.CalibreID == b.CalibreID && a.MatchMethod == b.MatchMethod &&
+		a.Confidence == b.Confidence && a.Status == b.Status &&
+		a.CalibreFingerprint == b.CalibreFingerprint && a.MatchDetailsJSON == b.MatchDetailsJSON
+}
+
+func reportForRun(res *ReconcileResult, readOnly bool) *ReconcileResult {
+	if readOnly {
+		return res
+	}
+	return nil
 }

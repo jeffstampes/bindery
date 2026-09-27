@@ -68,7 +68,22 @@ func (s *AuthoritativeService) Audit(ctx context.Context) (*AuditResult, error) 
 	if err != nil {
 		return nil, fmt.Errorf("read bindery editions for audit: %w", err)
 	}
-	return s.auditSnapshot(ctx, calibreBooks, binderyBooks, ids, editions, NewLibraryIndex(calibreBooks))
+	return s.auditSnapshot(ctx, calibreBooks, binderyBooks, ids, editions, NewLibraryIndex(calibreBooks), auditRunOptions{applyTags: true})
+}
+
+// AuditTransitions counts persisted finding state changes in a manual run.
+// IgnoredPreserved is a retained decision, not a new finding.
+type AuditTransitions struct {
+	NewUnresolved    int `json:"newUnresolved"`
+	Resolved         int `json:"resolved"`
+	IgnoredPreserved int `json:"ignoredPreserved"`
+	BecameHistorical int `json:"becameHistorical"`
+}
+
+type auditRunOptions struct {
+	report    *ReconcileResult
+	stage     func(string)
+	applyTags bool
 }
 
 type auditFindingKey struct {
@@ -82,7 +97,7 @@ type auditFindingKey struct {
 // fetched once; all comparisons and lifecycle decisions use indexed maps.
 func (s *AuthoritativeService) auditSnapshot(
 	ctx context.Context, calibreBooks []CalibreBook, binderyBooks []models.Book,
-	ids map[int64][]models.BookIdentifier, editions map[int64][]models.Edition, idx *LibraryIndex,
+	ids map[int64][]models.BookIdentifier, editions map[int64][]models.Edition, idx *LibraryIndex, opts auditRunOptions,
 ) (*AuditResult, error) {
 	refs, err := s.crossRef.ListByStatus(ctx, "")
 	if err != nil {
@@ -104,9 +119,20 @@ func (s *AuthoritativeService) auditSnapshot(
 		b.Editions = editions[b.ID]
 		booksByID[b.ID] = b
 	}
-	identity, err := s.refreshIdentity(ctx, refs, booksByID, idx)
+	if opts.stage != nil {
+		opts.stage("identity")
+	}
+	var identityStats *IdentityRefreshResult
+	if opts.report != nil {
+		identityStats = &IdentityRefreshResult{}
+		opts.report.Identity = identityStats
+	}
+	identity, err := s.refreshIdentity(ctx, refs, booksByID, idx, identityStats)
 	if err != nil {
 		return nil, fmt.Errorf("refresh calibre identity evidence: %w", err)
+	}
+	if opts.stage != nil {
+		opts.stage("audit")
 	}
 	old := make(map[auditFindingKey]models.CalibreAuditFinding, len(previous))
 	for _, f := range previous {
@@ -183,13 +209,55 @@ func (s *AuthoritativeService) auditSnapshot(
 		return nil, fmt.Errorf("persist calibre audit findings: %w", err)
 	}
 	result.Updated = written
-	result.TagUpdated, err = s.reconcileAuditTags(ctx)
-	if err != nil {
-		// Findings are already committed: never misrepresent them or require a
-		// Calibre write for audit to succeed. A later full pass retries even if
-		// none of the finding rows change.
-		result.TagError = err.Error()
-		slog.Warn("calibre audit tag reconciliation failed; findings remain committed", "error", err)
+	if opts.report != nil {
+		current, err := s.audits.List(ctx)
+		if err != nil {
+			return result, fmt.Errorf("read persisted audit transitions: %w", err)
+		}
+		transitions := &AuditTransitions{}
+		before := make(map[auditFindingKey]models.CalibreAuditFinding, len(previous))
+		for _, finding := range previous {
+			before[auditFindingKey{finding.BookID, finding.Field, finding.EvidenceKey}] = finding
+		}
+		for _, finding := range current {
+			prior, existed := before[auditFindingKey{finding.BookID, finding.Field, finding.EvidenceKey}]
+			switch finding.State {
+			case models.CalibreAuditUnresolved:
+				if !existed || prior.State != finding.State {
+					transitions.NewUnresolved++
+				}
+			case models.CalibreAuditResolved:
+				if existed && prior.State != finding.State {
+					transitions.Resolved++
+				}
+			case models.CalibreAuditIgnored:
+				if existed && (prior.State == models.CalibreAuditIgnored ||
+					(prior.State == models.CalibreAuditUnmatched && prior.IgnoredFingerprint != "")) {
+					transitions.IgnoredPreserved++
+				}
+			case models.CalibreAuditUnmatched:
+				if existed && prior.State != finding.State {
+					transitions.BecameHistorical++
+				}
+			}
+		}
+		opts.report.Transitions = transitions
+		if s.artifacts != nil {
+			opts.report.ArtifactScansCached, err = s.artifacts.CountCurrent(ctx)
+			if err != nil {
+				return result, fmt.Errorf("read cached artifact scan count: %w", err)
+			}
+		}
+	}
+	if opts.applyTags {
+		result.TagUpdated, err = s.reconcileAuditTags(ctx)
+		if err != nil {
+			// Findings are already committed: never misrepresent them or require a
+			// Calibre write for audit to succeed. A later full pass retries even if
+			// none of the finding rows change.
+			result.TagError = err.Error()
+			slog.Warn("calibre audit tag reconciliation failed; findings remain committed", "error", err)
+		}
 	}
 	return result, nil
 }
