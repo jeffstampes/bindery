@@ -66,6 +66,9 @@ func (h *stubIntegrationHandler) Identity(w http.ResponseWriter, _ *http.Request
 func (h *stubIntegrationHandler) ScanArtifacts(w http.ResponseWriter, _ *http.Request) {
 	h.record("scan-artifacts", w)
 }
+func (h *stubIntegrationHandler) ReportArtifactWriteback(w http.ResponseWriter, _ *http.Request) {
+	h.record("artifact-writeback", w)
+}
 func (h *stubIntegrationHandler) IdentifierProposals(w http.ResponseWriter, _ *http.Request) {
 	h.record("identifier-proposals", w)
 }
@@ -119,6 +122,7 @@ func TestIntegrationRoutesRequireAdmin(t *testing.T) {
 		{"calibre identifier attempts", http.MethodGet, "/calibre/audit/1/identifier-attempts"},
 		{"calibre identity evidence", http.MethodGet, "/calibre/identity/1"},
 		{"calibre artifact scan", http.MethodPost, "/calibre/identity/1/scan"},
+		{"calibre artifact writeback", http.MethodPost, "/calibre/identity/1/writeback"},
 	}
 	for _, tt := range gated {
 		t.Run(tt.name, func(t *testing.T) {
@@ -167,6 +171,7 @@ func TestIntegrationRoutesAllowAdmin(t *testing.T) {
 		{http.MethodPost, "/calibre/audit/1/identifier-add", "identifier-add"},
 		{http.MethodGet, "/calibre/audit/1/identifier-attempts", "identifier-attempts"},
 		{http.MethodGet, "/calibre/identity/1", "identity"},
+		{http.MethodPost, "/calibre/identity/1/writeback", "artifact-writeback"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {

@@ -83,7 +83,9 @@ func compareAuditBookWithIdentity(book *models.Book, cb *CalibreBook, ref *model
 		}
 		copyBook.Editions = nil
 		for _, ed := range book.Editions {
-			if rootEditions[ed.ForeignID] {
+			if rootEditions[ed.ForeignID] && (identity.Edition.EditionID == "" ||
+				(identity.Edition.Confidence != "exact" && identity.Edition.Confidence != "high") ||
+				ed.ForeignID == identity.Edition.EditionID) {
 				copyBook.Editions = append(copyBook.Editions, ed)
 			}
 		}
@@ -93,6 +95,12 @@ func compareAuditBookWithIdentity(book *models.Book, cb *CalibreBook, ref *model
 	calibreIDs := calibreAuditIdentifiers(cb)
 	c.compareIdentifiers(calibreIDs, identity)
 	matchedEdition := auditMatchedEdition(book.Editions, calibreIDs)
+	if identity.BookID == book.ID && identity.CalibreID == cb.CalibreID && identity.RootKey == identityRootKey(book) {
+		// A rooted snapshot is authoritative about which provider editions
+		// were actually returned. A CWA identifier alone cannot bypass an
+		// ambiguous resolver result. Work-level metadata remains advisory.
+		matchedEdition = editionFromEvidence(identity)
+	}
 	c.compareTitle(matchedEdition)
 	c.compareAuthors()
 	c.compareSeries(series)

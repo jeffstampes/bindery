@@ -91,6 +91,11 @@ func (c *auditComparator) compareIdentifiers(calibreIDs auditIdentifiers, identi
 			if e.Status != models.CalibreIdentityRoot && e.Status != models.CalibreIdentityCorroborated {
 				continue // Search candidates, conflicts and CWA claims are not evidence.
 			}
+			if e.EditionID != "" && identity.Edition.EditionID != "" &&
+				(identity.Edition.Confidence == "exact" || identity.Edition.Confidence == "high") &&
+				e.EditionID != identity.Edition.EditionID {
+				continue // compare the resolved ebook edition, not every work edition
+			}
 			for typ, values := range e.NormalizedIdentifiers {
 				if (typ == "isbn" || typ == "asin" || typ == "openlibrary_edition") &&
 					(e.EditionID == "" || e.ProviderMetadata["ebook"] != true) {

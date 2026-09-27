@@ -50,7 +50,10 @@ beforeEach(() => {
   vi.mocked(api.calibreAuditIdentity).mockResolvedValue({ bookId: 5, calibreId: 17, rootKey: 'openlibrary:OL1W', evidence: [
     { status: 'root', workConfidence: 'canonical', editionConfidence: 'unresolved' },
     { status: 'candidate', workConfidence: 'candidate', editionConfidence: 'candidate', editionId: 'OL4M' },
-  ] })
+  ], edition: { confidence: 'ambiguous', reason: 'Several editions share the claimed ISBN.', candidates: [
+    { provider: 'openlibrary', editionId: 'OL4M', reasons: ['CWA claims isbn (one correlated source)'] },
+    { provider: 'openlibrary', editionId: 'OL5M', reasons: [] },
+  ] } })
   vi.mocked(api.calibreAuditRecheck).mockResolvedValue({ running: true, startedAt: '2026-01-01' })
   vi.mocked(api.calibreAuditRecheckStatus).mockResolvedValue({ running: false })
   vi.mocked(api.calibreReconcile).mockResolvedValue({ state: 'running', stage: 'ownership', completedStages: [] })
@@ -367,8 +370,24 @@ describe('CalibreAuditPage', () => {
     expect(screen.getByText(/no exact owned edition/)).toBeInTheDocument()
     expect(api.calibreAuditIdentity).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Show work and edition evidence' }))
-    expect(await screen.findByText(/Provider work evidence: canonical. Edition evidence: not established/)).toBeInTheDocument()
+    expect(await screen.findByText(/Provider work evidence: canonical. Edition evidence: ambiguous/)).toBeInTheDocument()
+    expect(screen.getByText('Several editions share the claimed ISBN.')).toBeInTheDocument()
+    expect(screen.getByText(/openlibrary: OL4M/)).toBeInTheDocument()
+    expect(screen.getByText(/openlibrary: OL5M/)).toBeInTheDocument()
     expect(api.calibreAuditIdentity).toHaveBeenCalledWith(5)
+  })
+
+  it('shows the selected owned edition without calling a candidate confirmed by evidence status alone', async () => {
+    vi.mocked(api.calibreAuditIdentity).mockResolvedValue({ bookId: 5, calibreId: 17, rootKey: 'openlibrary:OL1W', evidence: [
+      { status: 'root', workConfidence: 'canonical', editionConfidence: 'unresolved' },
+      { status: 'root', workConfidence: 'exact', editionConfidence: 'unresolved', editionId: 'OL4M' },
+    ], edition: { confidence: 'high', editionId: 'OL4M', provider: 'openlibrary',
+      reason: 'A unique owned-book ISBN matches the edition.', candidates: [{ provider: 'openlibrary', editionId: 'OL4M', reasons: [] }] } })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Show work and edition evidence' }))
+    expect(await screen.findByText(/Edition evidence: high \(OL4M\)/)).toBeInTheDocument()
+    expect(screen.getByText('A unique owned-book ISBN matches the edition.')).toBeInTheDocument()
+    expect(screen.queryByText('A candidate edition is not a confirmed match to the owned file.')).not.toBeInTheDocument()
   })
 
   it('links valid Calibre provider-native claims but never arbitrary identifier text', async () => {

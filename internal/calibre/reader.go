@@ -56,6 +56,7 @@ type CalibreBook struct {
 	Title       string
 	SortTitle   string
 	PublishDate *time.Time
+	Publisher   string // owned Calibre publisher/imprint, when present
 	ISBN        string
 	Language    string   // primary ISO 639-2 code; empty if unset
 	Languages   []string // all Calibre language codes, in item order (bulk snapshots)
@@ -292,10 +293,12 @@ func (r *Reader) Books(ctx context.Context, fn func(CalibreBook) error) error {
 func (r *Reader) listBookHeaders(ctx context.Context) ([]CalibreBook, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT b.id, COALESCE(b.title, ''), COALESCE(b.sort, ''), b.pubdate,
-		       COALESCE(b.path, ''), b.series_index, COALESCE(s.name, '')
+		       COALESCE(b.path, ''), b.series_index, COALESCE(s.name, ''), COALESCE(p.name, '')
 		FROM books b
 		LEFT JOIN books_series_link bsl ON bsl.book = b.id
 		LEFT JOIN series s               ON s.id   = bsl.series
+		LEFT JOIN books_publishers_link bpl ON bpl.book = b.id
+		LEFT JOIN publishers p           ON p.id = bpl.publisher
 		ORDER BY b.id`)
 	if err != nil {
 		return nil, fmt.Errorf("query books: %w", err)
@@ -312,7 +315,7 @@ func (r *Reader) listBookHeaders(ctx context.Context) ([]CalibreBook, error) {
 			seriesName  string
 		)
 		if err := rows.Scan(&cb.CalibreID, &cb.Title, &cb.SortTitle, &pubdate,
-			&relPath, &seriesIndex, &seriesName); err != nil {
+			&relPath, &seriesIndex, &seriesName, &cb.Publisher); err != nil {
 			return nil, fmt.Errorf("scan book: %w", err)
 		}
 		cb.PublishDate = parseCalibreDate(pubdate.String)
@@ -491,10 +494,12 @@ func (r *Reader) GetBook(ctx context.Context, id int64) (*CalibreBook, error) {
 
 	row := r.db.QueryRowContext(ctx, `
 		SELECT b.id, COALESCE(b.title, ''), COALESCE(b.sort, ''), b.pubdate,
-		       COALESCE(b.path, ''), b.series_index, COALESCE(s.name, '')
+		       COALESCE(b.path, ''), b.series_index, COALESCE(s.name, ''), COALESCE(p.name, '')
 		FROM books b
 		LEFT JOIN books_series_link bsl ON bsl.book = b.id
 		LEFT JOIN series s               ON s.id   = bsl.series
+		LEFT JOIN books_publishers_link bpl ON bpl.book = b.id
+		LEFT JOIN publishers p           ON p.id = bpl.publisher
 		WHERE b.id = ?`, id)
 
 	var (
@@ -505,7 +510,7 @@ func (r *Reader) GetBook(ctx context.Context, id int64) (*CalibreBook, error) {
 		seriesName  string
 	)
 	if err := row.Scan(&cb.CalibreID, &cb.Title, &cb.SortTitle, &pubdate,
-		&relPath, &seriesIndex, &seriesName); err != nil {
+		&relPath, &seriesIndex, &seriesName, &cb.Publisher); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrBookNotFound
 		}

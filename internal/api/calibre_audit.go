@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -116,7 +117,89 @@ func (h *CalibreAuditHandler) ScanArtifacts(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "artifact scan unavailable"})
 		return
 	}
-	snapshot, err := scanner.ScanArtifacts(r.Context(), bookID)
+	var input struct {
+		AttestOriginal bool `json:"attestOriginal"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid scan provenance"})
+		return
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "scan request must be a single object"})
+		return
+	}
+	var snapshot *models.CalibreIdentitySnapshot
+	if input.AttestOriginal {
+		attested, ok := h.service.(interface {
+			ScanArtifactsAttested(context.Context, int64, bool) (*models.CalibreIdentitySnapshot, error)
+		})
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "artifact attestation unavailable"})
+			return
+		}
+		snapshot, err = attested.ScanArtifactsAttested(r.Context(), bookID, true)
+	} else {
+		snapshot, err = scanner.ScanArtifacts(r.Context(), bookID)
+	}
+	if errors.Is(err, calibre.ErrArtifactNotReady) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if snapshot == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "matched identity evidence unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+// ReportArtifactWriteback records the operator's knowledge of an external
+// Calibre-to-file metadata write. This endpoint does NOT write to Calibre or
+// touch the ebook; callers supply an RFC3339 time and a fixed source label.
+func (h *CalibreAuditHandler) ReportArtifactWriteback(w http.ResponseWriter, r *http.Request) {
+	if !h.available(w, r) {
+		return
+	}
+	bookID, err := strconv.ParseInt(chi.URLParam(r, "bookID"), 10, 64)
+	if err != nil || bookID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid book id"})
+		return
+	}
+	var input struct {
+		WrittenAt string `json:"writtenAt"`
+		Source    string `json:"source"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid write-back report"})
+		return
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "write-back report must be a single object"})
+		return
+	}
+	when, err := time.Parse(time.RFC3339Nano, input.WrittenAt)
+	if err != nil || when.IsZero() || when.After(time.Now().UTC()) ||
+		(input.Source != "polish_books" && input.Source != "calibre_to_file") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "writtenAt must be a past RFC3339 time; source must be polish_books or calibre_to_file"})
+		return
+	}
+	reporter, ok := h.service.(interface {
+		RecordArtifactWriteback(context.Context, int64, time.Time, string) (*models.CalibreIdentitySnapshot, error)
+	})
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "artifact provenance unavailable"})
+		return
+	}
+	snapshot, err := reporter.RecordArtifactWriteback(r.Context(), bookID, when, input.Source)
 	if errors.Is(err, calibre.ErrArtifactNotReady) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
