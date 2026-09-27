@@ -60,6 +60,9 @@ func (s *AuthoritativeService) IdentitySnapshot(ctx context.Context, bookID int6
 			return nil, nil
 		}
 	}
+	if err := s.attachArtifacts(ctx, snapshot); err != nil {
+		return nil, fmt.Errorf("read artifact evidence: %w", err)
+	}
 	return snapshot, nil
 }
 

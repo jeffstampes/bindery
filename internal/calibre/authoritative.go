@@ -20,6 +20,7 @@ type AuthoritativeService struct {
 	editions       *db.EditionRepo
 	audits         *db.CalibreAuditRepo
 	identity       *db.CalibreIdentityRepo
+	artifacts      *db.CalibreArtifactRepo
 	identitySource identityDiscoverer
 	readerFactory  func(string) (AuthoritativeLibrary, error)
 	// Serialize long audit snapshots and authoritative reconciliation within

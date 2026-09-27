@@ -12,6 +12,7 @@ type CalibreIdentitySnapshot struct {
 	Evidence  []CalibreIdentityEvidence `json:"evidence"`
 	Lookups   []CalibreIdentityLookup   `json:"lookups"`
 	Claims    []CalibreIdentityClaim    `json:"claims"`
+	Artifacts []CalibreArtifactScan     `json:"artifacts"`
 	CheckedAt time.Time                 `json:"checkedAt"`
 }
 
