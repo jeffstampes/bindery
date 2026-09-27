@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"slices"
 
 	"github.com/vavallee/bindery/internal/db"
@@ -131,6 +132,33 @@ func (s *AuthoritativeService) auditSnapshot(
 	if err != nil {
 		return nil, fmt.Errorf("refresh calibre identity evidence: %w", err)
 	}
+	// Artifact scans and write-back reports are Bindery-local, bulk read-only
+	// inputs. Current filesystem stats guard against stale scans, without
+	// opening a metadata.db connection or rescanning EPUB contents per book.
+	var scans map[int64][]models.CalibreArtifactScan
+	var history map[int64][]models.CalibreArtifactScan
+	var writebacks map[int64][]models.CalibreArtifactWriteback
+	if s.artifacts != nil && identity != nil {
+		scans, err = s.artifacts.ListCurrent(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("read artifact scans for audit: %w", err)
+		}
+		writebacks, err = s.artifacts.ListAllWritebacks(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("read artifact lineage for audit: %w", err)
+		}
+		history, err = s.artifacts.ListAllHistory(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("read historical artifact scans for audit: %w", err)
+		}
+	}
+	rootPath := s.LibraryPath(ctx)
+	if rootPath != "" {
+		rootPath, err = filepath.Abs(rootPath)
+		if err != nil {
+			return nil, fmt.Errorf("resolve artifact library root: %w", err)
+		}
+	}
 	if opts.stage != nil {
 		opts.stage("audit")
 	}
@@ -168,7 +196,27 @@ func (s *AuthoritativeService) auditSnapshot(
 		currentRef := ref
 		currentRef.MatchMethod = match.MatchMethod
 		currentRef.Confidence = match.Confidence
-		outcomes := compareAuditBookWithIdentity(book, cb, &currentRef, series[book.ID], identity[book.ID])
+		resolved := identity[book.ID]
+		if resolved.BookID == book.ID && resolved.CalibreID == cb.CalibreID && resolved.RootKey == identityRootKey(book) {
+			if len(scans[book.ID]) > 0 {
+				currentScans := make([]models.CalibreArtifactScan, 0, len(scans[book.ID]))
+				for _, scan := range scans[book.ID] {
+					if scan.CalibreID == cb.CalibreID {
+						currentScans = append(currentScans, scan)
+					}
+				}
+				assessArtifactScans(&resolved, currentScans, cb, rootPath, writebacks[book.ID])
+			}
+			for _, past := range history[book.ID] {
+				if past.CalibreID != cb.CalibreID {
+					continue
+				}
+				classifyArtifactLineage(&past, writebacks[book.ID])
+				resolved.ArtifactHistory = append(resolved.ArtifactHistory, past)
+			}
+			resolved.Edition = ResolveOwnedEdition(resolved, cb)
+		}
+		outcomes := compareAuditBookWithIdentity(book, cb, &currentRef, series[book.ID], resolved)
 		for key, outcome := range outcomes {
 			findingKey := auditFindingKey{ref.BookID, key.field, key.key}
 			prior, exists := old[findingKey]

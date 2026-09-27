@@ -1,6 +1,6 @@
 # Calibre/CWA authoritative-library mode — design contract
 
-Status: **accepted, implemented through the separately opted-in identifier-add path (#28).**
+Status: **accepted, implemented through read-only owned-edition resolution (#29).**
 The configuration and implemented slices below are part of this branch.
 
 Tracking: [#1](https://github.com/jeffstampes/bindery/issues/1) ·
@@ -140,6 +140,7 @@ Each slice is checked against the authority invariants above.
 | Audit/review UI | Implemented (#7) | Admin review queue with bounded, filtered findings and ignore/recheck actions | 7 |
 | `BinderyMismatch` write-back | Implemented (#8) | Optional, separately opt-in, one fixed Bindery-owned tag | 3, 8 |
 | Human-approved identifier additions | Implemented (#28; additions only) | Separately opted-in review/approval of uniquely supported missing work/provider IDs; no replacement, removal, edition resolution or bulk | 3, 7, 8 |
+| Owned edition resolution | Implemented (#29; read-only) | Resolve only exact canonical-work provider editions, model artifact/write-back lineage, and use selected editions in advisory audit | 3, 6, 7 |
 
 Reconciliation satisfies ebook ownership for confident matches and runs the
 backend metadata audit. It creates no Calibre-backed catalogue book. The
@@ -273,6 +274,55 @@ edition confidence; different or conflicting identifiers in one file keep it
 confidence, `books.foreign_id`, `book_identifiers`, cross-references, CWA
 metadata or ebook bytes. An old Calibre link's scans are not exposed as current
 when ownership changes.
+
+### Read-only owned-edition resolution (#29)
+
+`GET /api/v1/calibre/identity/{bookID}` now exposes a separate `edition`
+resolution (`exact`, `high`, `ambiguous`, `unresolved`), a reason and all eligible
+candidate editions. Only ebook editions from the canonical provider's *exact
+editions of the established work* are candidates. Work confidence is unchanged;
+wrong-work artifact IDs and cross-provider search results cannot redirect the
+root or create ownership. `exact` requires a unique valid ISBN in a complete,
+current file scan with an explicit original-file attestation; `high` is a unique
+CWA/native-edition-ID or ISBN claim, a unique shared-ISBN tie-break from complete
+edition language/year, or limited historical-file support. All CWA fields are
+one correlated source; all ISBNs in one file are one source. Provider fields
+from one record are not independent votes. Conflicts, multiple competing ISBNs,
+missing/partial/stale file evidence and ambiguous or truncated provider edition
+lists do not force a winner. A lone unknown-provenance artifact scan is never
+independent. The read-only Calibre snapshot exposes publisher/imprint, language
+and publication year for conservative shared-identifier tie-breaks (only when
+all competing provider editions supply a comparable value); original *work*
+publication date is never used.
+
+`POST /api/v1/calibre/identity/{bookID}/scan` accepts optional
+`{"attestOriginal":true}` when an admin can explicitly attest that the linked
+original ebook predates all known Calibre-to-file write-backs. Default scans
+carry **unknown** independence. Known earlier reports reject an original-file
+attestation. Admins can report an *external* Polish Books / Calibre-to-file
+operation using `POST /api/v1/calibre/identity/{bookID}/writeback` with
+`{"writtenAt":"<RFC3339 timestamp>","source":"polish_books"}` (or
+`"calibre_to_file"`). Reporting is a Bindery-only provenance record, not an
+operation on CWA or the ebook. Migration 096 retains superseded scans with
+original timestamps, digests and attestation in `artifactHistory`, and exposes
+reported events under `writebacks`. An observation before a known write-back is
+labelled `pre_writeback`, but is not presumed independent without explicit
+attestation; one after is `potentially_cwa_derived`. Without a report or
+attestation, lineage stays `unknown`. A report after a current scan makes that
+scan stale even if the filesystem timestamp did not change. A post-write-back
+scan cannot independently corroborate a CWA claim or attain `exact`. A past
+attested observation that agrees with a *current scan of the same linked file*
+may provide limited `high` support, never exact physical-file certainty.
+Unreported external write-backs cannot be detected automatically.
+
+Audits bulk-load the current scans, historical observations and reported events
+from Bindery; current file stats guard against stale evidence. The selected
+canonical provider edition, when exact/high, supplies edition title, language
+and publication year; when ambiguous/unresolved, publication year is not
+asserted from a work release date. Edition-scoped identifier comparisons prefer
+the selected edition instead of aggregating every edition of the work. This
+changes no CWA metadata, ebook bytes, #28 writer eligibility or #30 field
+reconciliation.
 
 ### Backend metadata audit (#6)
 

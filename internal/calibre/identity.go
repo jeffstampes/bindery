@@ -78,6 +78,21 @@ func (s *AuthoritativeService) IdentitySnapshot(ctx context.Context, bookID int6
 	if err := s.attachArtifacts(ctx, snapshot); err != nil {
 		return nil, fmt.Errorf("read artifact evidence: %w", err)
 	}
+	reader, err := OpenReader(s.LibraryPath(ctx))
+	if err != nil {
+		snapshot.Edition = ResolveOwnedEdition(*snapshot, nil)
+		return snapshot, nil // an unavailable library cannot assert an owned edition
+	}
+	cb, readErr := reader.GetBook(ctx, snapshot.CalibreID)
+	_ = reader.Close()
+	if readErr != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		snapshot.Edition = ResolveOwnedEdition(*snapshot, nil)
+		return snapshot, nil
+	}
+	snapshot.Edition = ResolveOwnedEdition(*snapshot, cb)
 	return snapshot, nil
 }
 

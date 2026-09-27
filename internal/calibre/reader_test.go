@@ -124,6 +124,16 @@ var fixtureSchema = []string{
 		book INTEGER NOT NULL,
 		series INTEGER NOT NULL
 	)`,
+	`CREATE TABLE publishers (
+		id INTEGER PRIMARY KEY,
+		name TEXT NOT NULL COLLATE NOCASE
+	)`,
+	`CREATE TABLE books_publishers_link (
+		id INTEGER PRIMARY KEY,
+		book INTEGER NOT NULL,
+		publisher INTEGER NOT NULL,
+		UNIQUE(book)
+	)`,
 	`CREATE TABLE data (
 		id INTEGER PRIMARY KEY,
 		book INTEGER NOT NULL,
@@ -163,6 +173,8 @@ var fixtureSeed = []string{
 		(3, 'No Cover',   'No Cover',   '0101-01-01 00:00:00+00:00', 'Bob Baker/No Cover (3)',      1.0)`,
 	`INSERT INTO books_authors_link (book, author) VALUES (1, 1), (2, 1), (2, 3), (3, 2)`,
 	`INSERT INTO books_series_link (book, series) VALUES (1, 1), (2, 1)`,
+	`INSERT INTO publishers (id, name) VALUES (1, 'Ace Books'), (2, 'Other Press')`,
+	`INSERT INTO books_publishers_link (book, publisher) VALUES (1, 1), (2, 2)`,
 	`INSERT INTO data (book, format, uncompressed_size, name) VALUES
 		(1, 'EPUB', 12345, 'bookone'),
 		(2, 'EPUB', 23456, 'booktwo'),
@@ -183,6 +195,27 @@ func TestOpenReader_EmptyPath(t *testing.T) {
 	_, err := OpenReader("")
 	if err == nil {
 		t.Fatal("expected error for empty library_path")
+	}
+}
+
+func TestReaderPublisherInAllReadPaths(t *testing.T) {
+	r := mustOpenFixture(t)
+	defer r.Close()
+	ctx := context.Background()
+	one, err := r.GetBook(ctx, 1)
+	if err != nil || one.Publisher != "Ace Books" {
+		t.Fatalf("single book publisher: %+v %v", one, err)
+	}
+	all, err := r.AllBooksMetadata(ctx)
+	if err != nil || len(all) != 3 || all[0].Publisher != "Ace Books" || all[1].Publisher != "Other Press" || all[2].Publisher != "" {
+		t.Fatalf("bulk publisher: %+v %v", all, err)
+	}
+	var streamed []string
+	if err := r.Books(ctx, func(book CalibreBook) error {
+		streamed = append(streamed, book.Publisher)
+		return nil
+	}); err != nil || len(streamed) != 3 || streamed[0] != "Ace Books" || streamed[1] != "Other Press" || streamed[2] != "" {
+		t.Fatalf("streamed publishers: %+v %v", streamed, err)
 	}
 }
 

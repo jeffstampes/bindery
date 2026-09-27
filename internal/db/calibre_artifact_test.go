@@ -8,6 +8,56 @@ import (
 	"github.com/vavallee/bindery/internal/models"
 )
 
+func TestCalibreArtifactRepoWritebackHistoryAndOwnership(t *testing.T) {
+	identity, _, books, done := identityTestBooks(t, 2)
+	defer done()
+	ctx := context.Background()
+	repo := NewCalibreArtifactRepo(identity.db)
+	before := time.Now().UTC().Add(-3 * time.Hour)
+	scan := models.CalibreArtifactScan{BookID: books[0].ID, CalibreID: 11, Format: "EPUB", FileName: "book",
+		FilePath: "Book (11)/book.epub", SHA256: "old", SizeBytes: 50,
+		Method: "bindery_epub_v1", Outcome: "scanned", ModifiedAt: before, ScannedAt: before,
+		Identifiers: []models.CalibreArtifactIdentifier{{NormalizedValue: "9780306406157"}}}
+	if err := repo.ReplaceForBook(ctx, scan.BookID, 11, []models.CalibreArtifactScan{scan}); err != nil {
+		t.Fatal(err)
+	}
+	event := models.CalibreArtifactWriteback{BookID: scan.BookID, CalibreID: 11, Source: "polish_books", WrittenAt: before.Add(time.Hour)}
+	if err := repo.RecordWriteback(ctx, event); err != nil {
+		t.Fatal(err)
+	}
+	scan.SHA256, scan.ScannedAt = "after", before.Add(2*time.Hour)
+	if err := repo.ReplaceForBook(ctx, scan.BookID, 11, []models.CalibreArtifactScan{scan}); err != nil {
+		t.Fatal(err)
+	}
+	history, err := repo.ListHistoryByBookID(ctx, scan.BookID, 11)
+	if err != nil || len(history) != 1 || !history[0].Historical || history[0].SHA256 != "old" ||
+		!history[0].ScannedAt.Equal(before) || history[0].Identifiers[0].NormalizedValue != "9780306406157" {
+		t.Fatalf("old scan lineage was overwritten: %+v %v", history, err)
+	}
+	current, err := repo.ListByBookID(ctx, scan.BookID, 11)
+	if err != nil || len(current) != 1 || current[0].SHA256 != "after" {
+		t.Fatalf("new scan missing: %+v %v", current, err)
+	}
+	writebacks, err := repo.ListWritebacks(ctx, scan.BookID, 11)
+	if err != nil || len(writebacks) != 1 || !writebacks[0].WrittenAt.Equal(event.WrittenAt) {
+		t.Fatalf("write-back event missing: %+v %v", writebacks, err)
+	}
+	if previous, err := repo.ListHistoryByBookID(ctx, scan.BookID, 12); err != nil || len(previous) != 0 {
+		t.Fatalf("older ownership leaked into new link: %+v %v", previous, err)
+	}
+	if previous, err := repo.ListWritebacks(ctx, scan.BookID, 12); err != nil || len(previous) != 0 {
+		t.Fatalf("older writeback leaked into new link: %+v %v", previous, err)
+	}
+	if err := repo.RecordWriteback(ctx, models.CalibreArtifactWriteback{BookID: scan.BookID, CalibreID: 11,
+		Source: "polish_books", WrittenAt: time.Now().UTC().Add(time.Hour)}); err == nil {
+		t.Fatal("future report accepted")
+	}
+	all, err := repo.ListCurrent(ctx)
+	if err != nil || len(all[scan.BookID]) != 1 {
+		t.Fatalf("bulk scan inventory: %+v %v", all, err)
+	}
+}
+
 func TestCalibreArtifactRepoIndependentOfProviderRefresh(t *testing.T) {
 	identity, _, books, done := identityTestBooks(t, 2)
 	defer done()

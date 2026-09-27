@@ -59,6 +59,57 @@ func artifactFixture(t *testing.T, content string) (auditTestFixture, *db.Calibr
 	return f, artifacts, source
 }
 
+func TestArtifactWritebackLineageRetainsPreScanWithoutMutatingOwnedFile(t *testing.T) {
+	f, repo, _ := artifactFixture(t, `ISBN: 9780306406157`)
+	ctx := context.Background()
+	first, err := f.svc.ScanArtifactsAttested(ctx, f.book.ID, true)
+	if err != nil || first.Edition.Confidence != "exact" || !first.Artifacts[0].AttestedOriginal {
+		t.Fatalf("explicit original-file attestation did not establish independent evidence: %+v %v", first, err)
+	}
+	beforeDB := calibreDBContents(t, f.root)
+	path := filepath.Join(f.root, first.Artifacts[0].FilePath)
+	beforeFile, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := first.Artifacts[0]
+	old.ScannedAt = time.Now().UTC().Add(-2 * time.Hour)
+	if err := repo.ReplaceForBook(ctx, f.book.ID, first.CalibreID, []models.CalibreArtifactScan{old}); err != nil {
+		t.Fatal(err)
+	}
+	written := time.Now().UTC().Add(-time.Hour)
+	reported, err := f.svc.RecordArtifactWriteback(ctx, f.book.ID, written, "polish_books")
+	if err != nil || len(reported.Writebacks) != 1 || reported.Artifacts[0].Lineage != "pre_writeback" {
+		t.Fatalf("reported write-back before rescan: %+v %v", reported, err)
+	}
+	after, err := f.svc.ScanArtifacts(ctx, f.book.ID)
+	if err != nil || after == nil || len(after.ArtifactHistory) < 2 {
+		t.Fatalf("rescan erased earlier observations: %+v %v", after, err)
+	}
+	if after.Artifacts[0].Lineage != "potentially_cwa_derived" || after.Edition.Confidence != "high" {
+		t.Fatalf("post-write-back echo promoted to independent exact match: %+v", after)
+	}
+	foundPre := false
+	for _, past := range after.ArtifactHistory {
+		if past.ScannedAt.Equal(old.ScannedAt) && past.Lineage == "pre_writeback" && past.SHA256 == old.SHA256 {
+			foundPre = true
+		}
+	}
+	if !foundPre || after.RootKey != "openlibrary:OL100W" {
+		t.Fatalf("pre-write-back lineage or canonical root lost: %+v", after)
+	}
+	afterFile, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(beforeFile, afterFile) || !bytes.Equal(beforeDB, calibreDBContents(t, f.root)) {
+		t.Fatal("write-back report or rescan changed CWA metadata/ebook bytes")
+	}
+	if _, err := f.svc.Audit(ctx); err != nil {
+		t.Fatalf("audit cannot consume resolved edition: %v", err)
+	}
+}
+
 func TestArtifactScanMatchingAndPersistence(t *testing.T) {
 	f, repo, _ := artifactFixture(t, `ISBN: 978-0-306-40615-7`)
 	before := calibreDBContents(t, f.root)

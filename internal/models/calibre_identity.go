@@ -6,14 +6,17 @@ import "time"
 // Calibre/CWA metadata. The root key is the canonical identity selected for a
 // Bindery work, or empty when the discovery pass did not establish one.
 type CalibreIdentitySnapshot struct {
-	BookID    int64                     `json:"bookId"`
-	CalibreID int64                     `json:"calibreId"`
-	RootKey   string                    `json:"rootKey"`
-	Evidence  []CalibreIdentityEvidence `json:"evidence"`
-	Lookups   []CalibreIdentityLookup   `json:"lookups"`
-	Claims    []CalibreIdentityClaim    `json:"claims"`
-	Artifacts []CalibreArtifactScan     `json:"artifacts"`
-	CheckedAt time.Time                 `json:"checkedAt"`
+	BookID          int64                      `json:"bookId"`
+	CalibreID       int64                      `json:"calibreId"`
+	RootKey         string                     `json:"rootKey"`
+	Evidence        []CalibreIdentityEvidence  `json:"evidence"`
+	Lookups         []CalibreIdentityLookup    `json:"lookups"`
+	Claims          []CalibreIdentityClaim     `json:"claims"`
+	Artifacts       []CalibreArtifactScan      `json:"artifacts"`
+	ArtifactHistory []CalibreArtifactScan      `json:"artifactHistory,omitempty"`
+	Writebacks      []CalibreArtifactWriteback `json:"writebacks,omitempty"`
+	Edition         CalibreEditionResolution   `json:"edition"`
+	CheckedAt       time.Time                  `json:"checkedAt"`
 }
 
 const (

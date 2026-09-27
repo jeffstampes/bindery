@@ -108,6 +108,7 @@ type calibreAuditRouteHandler interface {
 	Reopen(http.ResponseWriter, *http.Request)
 	Identity(http.ResponseWriter, *http.Request)
 	ScanArtifacts(http.ResponseWriter, *http.Request)
+	ReportArtifactWriteback(http.ResponseWriter, *http.Request)
 	IdentifierProposals(http.ResponseWriter, *http.Request)
 	IdentifierAdd(http.ResponseWriter, *http.Request)
 	IdentifierAttempts(http.ResponseWriter, *http.Request)
@@ -129,5 +130,6 @@ func registerCalibreAuditRoutes(r chi.Router, h calibreAuditRouteHandler) {
 		r.Get("/calibre/audit/{id}/identifier-attempts", h.IdentifierAttempts)
 		r.Get("/calibre/identity/{bookID}", h.Identity)
 		r.Post("/calibre/identity/{bookID}/scan", h.ScanArtifacts)
+		r.Post("/calibre/identity/{bookID}/writeback", h.ReportArtifactWriteback)
 	})
 }

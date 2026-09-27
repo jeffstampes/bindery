@@ -93,12 +93,20 @@ function IdentityContext({ finding }: { finding: CalibreAuditFinding }) {
       .finally(() => setLoading(false))
   }
   const root = snapshot?.evidence.find(e => e.status === 'root' && !e.editionId)
-  const edition = snapshot?.evidence.find(e => e.editionId && (e.status === 'root' || e.status === 'corroborated') && e.editionConfidence !== 'unresolved')
+  const resolution = snapshot?.edition
+  const edition = resolution?.editionId ? `${resolution.confidence} (${resolution.editionId})` : resolution?.confidence || t('calibreAudit.unknown')
   return <div className="text-xs text-fg-muted">
     <button type="button" onClick={toggle} aria-expanded={open} className="text-emerald-700 dark:text-emerald-400 underline">{t('calibreAudit.identityContext')}</button>
-    {open && <p className="mt-1">{loading ? t('common.loading') : error ? t('calibreAudit.identityUnavailable') : snapshot
-      ? t('calibreAudit.identitySummary', { work: root?.workConfidence || t('calibreAudit.unknown'), edition: edition?.editionConfidence || t('calibreAudit.unknown') })
-      : t('calibreAudit.identityUnavailable')} {snapshot && t('calibreAudit.editionCaveat')}</p>}
+    {open && <div className="mt-1">{loading ? t('common.loading') : error ? t('calibreAudit.identityUnavailable') : snapshot
+      ? <>
+          <p>{t('calibreAudit.identitySummary', { work: root?.workConfidence || t('calibreAudit.unknown'), edition })}</p>
+          {resolution?.reason && <p>{resolution.reason}</p>}
+          {(resolution?.confidence === 'ambiguous' || resolution?.confidence === 'unresolved') && <p>{t('calibreAudit.editionCaveat')}</p>}
+          {resolution?.candidates?.length ? <ul>{resolution.candidates.map(candidate =>
+            <li key={`${candidate.provider}:${candidate.editionId}`}>{candidate.provider}: {candidate.editionId}{candidate.reasons.length ? ` — ${candidate.reasons.join('; ')}` : ''}</li>
+          )}</ul> : null}
+        </>
+      : t('calibreAudit.identityUnavailable')}</div>}
   </div>
 }
 

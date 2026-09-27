@@ -153,6 +153,13 @@ export interface CalibreIdentitySnapshot {
     editionConfidence: string
     editionId?: string
   }>
+  edition?: {
+    confidence: 'exact' | 'high' | 'ambiguous' | 'unresolved'
+    editionId?: string
+    provider?: string
+    reason: string
+    candidates: Array<{ editionId: string; provider: string; reasons: string[] }>
+  }
 }
 
 export interface CalibreAuditDecision {
