@@ -143,6 +143,24 @@ export interface CalibreAuditEvidence {
   recordId?: number
 }
 
+export interface CalibreIdentitySnapshot {
+  bookId: number
+  calibreId: number
+  rootKey: string
+  evidence: Array<{
+    status: string
+    workConfidence: string
+    editionConfidence: string
+    editionId?: string
+  }>
+}
+
+export interface CalibreAuditDecision {
+  action: 'ignore' | 'reopen'
+  comparisonFingerprint: string
+  createdAt: string
+}
+
 export interface CalibreAuditFinding {
   id: number
   bookId: number
@@ -159,6 +177,7 @@ export interface CalibreAuditFinding {
   reason: string
   comparisonFingerprint: string
   state: 'unresolved' | 'ignored' | 'resolved' | 'unmatched'
+  decisions?: CalibreAuditDecision[]
   createdAt: string
   updatedAt: string
 }
@@ -197,10 +216,13 @@ export const calibreApi = {
     request<CalibreRollbackResult>(`/calibre/runs/${runId}/rollback/preview`),
   calibreRunRollback: (runId: number) =>
     request<CalibreRollbackResult>(`/calibre/runs/${runId}/rollback`, { method: 'POST' }),
-  calibreAudit: (params: { state?: string; findingType?: string; assessment?: string; limit: number; offset: number }) =>
+  calibreAudit: (params: { state?: string; findingType?: string; assessment?: string; identifierScope?: string; limit: number; offset: number }) =>
     request<CalibreAuditPage>(`/calibre/audit?${new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)])).toString()}`),
   calibreAuditIgnore: (id: number, comparisonFingerprint: string) =>
     request<void>(`/calibre/audit/${id}/ignore`, { method: 'POST', body: JSON.stringify({ comparisonFingerprint }) }),
+  calibreAuditReopen: (id: number, comparisonFingerprint: string) =>
+    request<void>(`/calibre/audit/${id}/reopen`, { method: 'POST', body: JSON.stringify({ comparisonFingerprint }) }),
+  calibreAuditIdentity: (bookId: number) => request<CalibreIdentitySnapshot>(`/calibre/identity/${bookId}`),
   calibreAuditRecheck: () => request<CalibreAuditRecheckStatus>('/calibre/audit/recheck', { method: 'POST' }),
   calibreAuditRecheckStatus: () => request<CalibreAuditRecheckStatus>('/calibre/audit/recheck/status'),
 }

@@ -103,6 +103,7 @@ type calibreAuditRouteHandler interface {
 	Recheck(http.ResponseWriter, *http.Request)
 	RecheckStatus(http.ResponseWriter, *http.Request)
 	Ignore(http.ResponseWriter, *http.Request)
+	Reopen(http.ResponseWriter, *http.Request)
 	Identity(http.ResponseWriter, *http.Request)
 	ScanArtifacts(http.ResponseWriter, *http.Request)
 }
@@ -115,6 +116,7 @@ func registerCalibreAuditRoutes(r chi.Router, h calibreAuditRouteHandler) {
 		r.Post("/calibre/audit/recheck", h.Recheck)
 		r.Get("/calibre/audit/recheck/status", h.RecheckStatus)
 		r.Post("/calibre/audit/{id}/ignore", h.Ignore)
+		r.Post("/calibre/audit/{id}/reopen", h.Reopen)
 		r.Get("/calibre/identity/{bookID}", h.Identity)
 		r.Post("/calibre/identity/{bookID}/scan", h.ScanArtifacts)
 	})

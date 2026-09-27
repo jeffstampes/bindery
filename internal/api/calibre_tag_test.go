@@ -125,4 +125,24 @@ func TestCalibreAuditIgnoreTagFailurePreservesDecision(t *testing.T) {
 	if rec := request("seen"); rec.Code != http.StatusNoContent || spy.called != 1 || !spy.ignored {
 		t.Fatalf("failed tag write affected review: %d calls=%d committed=%t", rec.Code, spy.called, spy.ignored)
 	}
+	reopen := func(fingerprint string) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		r := chi.NewRouter()
+		r.Post("/calibre/audit/{id}/reopen", h.Reopen)
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+			"/calibre/audit/"+strconv.FormatInt(spy.id, 10)+"/reopen",
+			strings.NewReader(`{"comparisonFingerprint":"`+fingerprint+`"}`)))
+		return rec
+	}
+	if rec := reopen("stale"); rec.Code != http.StatusConflict || spy.called != 1 {
+		t.Fatalf("stale reopen triggered tag write: %d calls=%d", rec.Code, spy.called)
+	}
+	if rec := reopen("seen"); rec.Code != http.StatusNoContent || spy.called != 2 {
+		t.Fatalf("tag write failure affected reopen: %d calls=%d", rec.Code, spy.called)
+	}
+	page, _, err := repo.ListPage(ctx, db.CalibreAuditListOpts{Limit: 10})
+	if err != nil || len(page) != 1 || page[0].State != models.CalibreAuditUnresolved || len(page[0].Decisions) != 2 {
+		t.Fatalf("reopen decision not committed before tag attempt: %+v %v", page, err)
+	}
 }

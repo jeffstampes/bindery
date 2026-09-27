@@ -194,12 +194,14 @@ func (s *AuthoritativeService) auditSnapshot(
 	return result, nil
 }
 
-// An unchanged value and owned match preserve an ignore even when the raw
-// spelling or harmless formatting changed. Apply also enforces this rule in
-// SQL if a human ignores a finding concurrently with a running audit.
+// A reviewer's ignore survives a refreshed comparison on the same owned
+// Calibre book. Only an explicit Reopen can return it to the review queue;
+// equality still resolves it automatically and a lost match becomes unmatched.
+// Apply repeats the guard in SQL for a concurrent human decision.
 func auditEffectiveState(prior, next models.CalibreAuditFinding) string {
-	if prior.IgnoredFingerprint != "" && prior.CalibreID == next.CalibreID &&
-		prior.IgnoredFingerprint == next.ComparisonFingerprint {
+	if prior.CalibreID == next.CalibreID &&
+		(prior.State == models.CalibreAuditIgnored ||
+			(prior.State == models.CalibreAuditUnmatched && prior.IgnoredFingerprint != "")) {
 		return models.CalibreAuditIgnored
 	}
 	return next.State

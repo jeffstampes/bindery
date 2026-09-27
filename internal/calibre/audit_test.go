@@ -211,7 +211,7 @@ func TestCalibreAudit_ReconcileAndRecheck(t *testing.T) {
 	if ignored.State != models.CalibreAuditIgnored || ignored.ComparisonFingerprint != finding.ComparisonFingerprint {
 		t.Fatalf("equivalent evidence reopened ignore: %+v", ignored)
 	}
-	// A material authoritative change reopens exactly the old finding.
+	// A material change updates the evidence but does not undo a human ignore.
 	updateFixtureCalibreTitle(t, f.root, "Changed Calibre Title")
 	before = calibreDBContents(t, f.root)
 	res, err = f.svc.Reconcile(ctx)
@@ -221,26 +221,36 @@ func TestCalibreAudit_ReconcileAndRecheck(t *testing.T) {
 	if !bytes.Equal(before, calibreDBContents(t, f.root)) {
 		t.Fatal("audit wrote to Calibre after a Calibre edit")
 	}
+	changed := auditFindingFor(t, f.findings, models.CalibreAuditFieldTitle, "")
+	if changed.State != models.CalibreAuditIgnored || changed.ID != ignored.ID ||
+		changed.ComparisonFingerprint == ignored.ComparisonFingerprint || changed.CalibreEvidence[0].Value != "Changed Calibre Title" {
+		t.Fatalf("Calibre edit did not refresh ignored finding evidence: %+v", changed)
+	}
+	if ok, err := f.findings.Reopen(ctx, changed.ID, changed.ComparisonFingerprint); err != nil || !ok {
+		t.Fatalf("explicit reopen: %v %v", ok, err)
+	}
+	if audit, err := f.svc.Audit(ctx); err != nil || audit.Updated != 0 {
+		t.Fatalf("reopened finding should stay unresolved across re-audit: %+v %v", audit, err)
+	}
 	reopened := auditFindingFor(t, f.findings, models.CalibreAuditFieldTitle, "")
-	if reopened.State != models.CalibreAuditUnresolved || reopened.ID != ignored.ID ||
-		reopened.ComparisonFingerprint == ignored.ComparisonFingerprint {
-		t.Fatalf("Calibre edit did not reopen existing ignored finding: %+v", reopened)
+	if reopened.State != models.CalibreAuditUnresolved {
+		t.Fatalf("explicitly reopened finding silently re-ignored: %+v", reopened)
 	}
 	if ok, err := f.findings.Ignore(ctx, reopened.ID, reopened.ComparisonFingerprint); err != nil || !ok {
 		t.Fatalf("ignore updated title: %v %v", ok, err)
 	}
 	beforeProvider := auditFindingFor(t, f.findings, models.CalibreAuditFieldTitle, "")
-	// An external edition update also reopens the ignore for the same field.
+	// A provider change also refreshes evidence without undoing the ignore.
 	if _, err := f.database.ExecContext(ctx, `UPDATE editions SET title = ? WHERE id = ?`, "Different Provider Title", f.edition.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.svc.Audit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	reopened = auditFindingFor(t, f.findings, models.CalibreAuditFieldTitle, "")
-	if reopened.State != models.CalibreAuditUnresolved || reopened.ComparisonFingerprint == beforeProvider.ComparisonFingerprint ||
-		reopened.BinderyEvidence[0].Value != "Different Provider Title" {
-		t.Fatalf("provider edit did not reopen ignored finding: %+v", reopened)
+	changed = auditFindingFor(t, f.findings, models.CalibreAuditFieldTitle, "")
+	if changed.State != models.CalibreAuditIgnored || changed.ComparisonFingerprint == beforeProvider.ComparisonFingerprint ||
+		changed.BinderyEvidence[0].Value != "Different Provider Title" {
+		t.Fatalf("provider edit silently reopened ignored finding: %+v", changed)
 	}
 	if _, err := f.database.ExecContext(ctx, `UPDATE editions SET title = ? WHERE id = ?`, "Changed Calibre Title", f.edition.ID); err != nil {
 		t.Fatal(err)
@@ -389,7 +399,7 @@ func TestCalibreAudit_IgnoreSurvivesTemporaryUnmatch(t *testing.T) {
 	}
 }
 
-func TestCalibreAudit_MatchDowngradeReopensIgnore(t *testing.T) {
+func TestCalibreAudit_MatchDowngradePreservesIgnore(t *testing.T) {
 	f := newAuditTestFixture(t)
 	ctx := context.Background()
 	// Title/author fallback stays valid after the exact-match ISBN disappears.
@@ -421,9 +431,9 @@ func TestCalibreAudit_MatchDowngradeReopensIgnore(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := auditFindingFor(t, f.findings, models.CalibreAuditFieldSeries, "")
-	if got.State != models.CalibreAuditUnresolved || got.MatchMethod != "fallback_title_author" ||
+	if got.State != models.CalibreAuditIgnored || got.MatchMethod != "fallback_title_author" ||
 		got.MatchConfidence != models.CalibreMatchConfidenceMedium {
-		t.Fatalf("changed matching evidence must reopen old ignore: %+v", got)
+		t.Fatalf("changed matching evidence should remain ignored for the same owned book: %+v", got)
 	}
 }
 

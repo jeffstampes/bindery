@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/vavallee/bindery/internal/models"
@@ -59,5 +60,25 @@ func TestCalibreAuditRepo_ListPageFiltersAndBounds(t *testing.T) {
 	page, total, err = repo.ListPage(ctx, CalibreAuditListOpts{State: models.CalibreAuditResolved})
 	if err != nil || total != 0 || page == nil || len(page) != 0 {
 		t.Fatalf("empty page: %v %d %v", err, total, page)
+	}
+	for _, key := range []string{"isbn", "asin", "openlibrary_edition", "hardcover"} {
+		finding := models.CalibreAuditFinding{BookID: book.ID, CalibreID: 5,
+			Field: models.CalibreAuditFieldIdentifiers, EvidenceKey: key,
+			FindingType: models.CalibreAuditIdentifierMissing, Assessment: models.CalibreAuditAmbiguous,
+			ComparisonFingerprint: key, State: models.CalibreAuditUnresolved}
+		if _, err := repo.Apply(ctx, []models.CalibreAuditFinding{finding}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, total, err = repo.ListPage(ctx, CalibreAuditListOpts{IdentifierScope: "edition"})
+	if err != nil || total != 3 || len(page) != 3 {
+		t.Fatalf("edition-oriented review includes work identifiers: total=%d page=%+v err=%v", total, page, err)
+	}
+	if !slices.ContainsFunc(page, func(f models.CalibreAuditFinding) bool { return f.EvidenceKey == "asin" }) {
+		t.Fatalf("ebook-edition ASIN evidence absent from edition-oriented review: %+v", page)
+	}
+	page, total, err = repo.ListPage(ctx, CalibreAuditListOpts{IdentifierScope: "work", FindingType: models.CalibreAuditIdentifierMissing})
+	if err != nil || total != 1 || len(page) != 1 || page[0].EvidenceKey != "hardcover" {
+		t.Fatalf("work scope includes edition identifiers: total=%d page=%+v err=%v", total, page, err)
 	}
 }

@@ -46,11 +46,18 @@ type CalibreAuditEvidence struct {
 	RecordID  int64  `json:"recordId,omitempty"`
 }
 
+// CalibreAuditDecision records a human action against the comparison visible
+// at the time. Re-audits may update evidence but never rewrite these actions.
+type CalibreAuditDecision struct {
+	Action                string    `json:"action"`
+	ComparisonFingerprint string    `json:"comparisonFingerprint"`
+	CreatedAt             time.Time `json:"createdAt"`
+}
+
 // CalibreAuditFinding is an advisory comparison for one matched owned book.
 // EvidenceKey distinguishes identifier types and series positions within a
-// field. The fingerprint covers only materially compared values and identities:
-// an ignored finding is reopened if either side changes, not for formatting.
-// Resolved and unmatched rows retain the last evidence for review history.
+// field. Ignored findings keep their human decision even if evidence changes;
+// resolved and unmatched rows retain the last evidence for review history.
 type CalibreAuditFinding struct {
 	ID     int64 `json:"id"`
 	BookID int64 `json:"bookId"`
@@ -67,10 +74,12 @@ type CalibreAuditFinding struct {
 	MatchConfidence       string                 `json:"matchConfidence"`
 	Reason                string                 `json:"reason"`
 	ComparisonFingerprint string                 `json:"comparisonFingerprint"`
-	// IgnoredFingerprint retains a reviewer decision while a comparison is
-	// temporarily unmatched; it is cleared when materially new evidence appears.
-	IgnoredFingerprint string    `json:"-"`
-	State              string    `json:"state"`
-	CreatedAt          time.Time `json:"createdAt"`
-	UpdatedAt          time.Time `json:"updatedAt"`
+	// IgnoredFingerprint remembers the comparison originally ignored while
+	// evidence is refreshed or temporarily unmatched. The explicit Reopen
+	// action clears it; Decisions retains the human action history.
+	IgnoredFingerprint string                 `json:"-"`
+	Decisions          []CalibreAuditDecision `json:"decisions,omitempty"`
+	State              string                 `json:"state"`
+	CreatedAt          time.Time              `json:"createdAt"`
+	UpdatedAt          time.Time              `json:"updatedAt"`
 }

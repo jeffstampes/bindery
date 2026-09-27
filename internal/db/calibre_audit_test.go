@@ -83,9 +83,28 @@ func TestCalibreAuditRepo_IgnoreAndRecheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	list, err = repo.List(ctx)
-	if err != nil || len(list) != 1 || list[0].State != models.CalibreAuditUnresolved || list[0].ComparisonFingerprint != "fp-2" ||
-		list[0].IgnoredFingerprint != "" || list[0].ID != initial.ID {
-		t.Fatalf("changed evidence did not reopen finding in place: %v %v", list, err)
+	if err != nil || len(list) != 1 || list[0].State != models.CalibreAuditIgnored || list[0].ComparisonFingerprint != "fp-2" ||
+		list[0].IgnoredFingerprint != initial.ComparisonFingerprint || list[0].ID != initial.ID {
+		t.Fatalf("changed evidence silently reopened ignored finding: %v %v", list, err)
+	}
+	if ok, err := repo.Reopen(ctx, initial.ID, "fp-1"); err != nil || ok {
+		t.Fatalf("stale reopen: ok=%v err=%v", ok, err)
+	}
+	if ok, err := repo.Reopen(ctx, initial.ID, "fp-2"); err != nil || !ok {
+		t.Fatalf("explicit reopen: ok=%v err=%v", ok, err)
+	}
+	if _, err := repo.Apply(ctx, []models.CalibreAuditFinding{finding}); err != nil {
+		t.Fatal(err)
+	}
+	list, err = repo.List(ctx)
+	if err != nil || list[0].State != models.CalibreAuditUnresolved || list[0].IgnoredFingerprint != "" {
+		t.Fatalf("reopened finding was re-ignored by the next audit: %+v %v", list, err)
+	}
+	page, _, err := repo.ListPage(ctx, CalibreAuditListOpts{Limit: 10})
+	if err != nil || len(page) != 1 || len(page[0].Decisions) != 2 ||
+		page[0].Decisions[0].Action != "ignore" || page[0].Decisions[0].ComparisonFingerprint != "fp-1" ||
+		page[0].Decisions[1].Action != "reopen" || page[0].Decisions[1].ComparisonFingerprint != "fp-2" {
+		t.Fatalf("reopen lost human decision history: %+v %v", page, err)
 	}
 	finding.State = models.CalibreAuditResolved
 	finding.Reason = "Values now equivalent."
@@ -110,6 +129,60 @@ func TestCalibreAuditRepo_IgnoreAndRecheck(t *testing.T) {
 	list, err = repo.List(ctx)
 	if err != nil || len(list) != 0 {
 		t.Fatalf("book delete should cascade findings: %v %v", list, err)
+	}
+}
+
+func TestCalibreAuditRepo_BackfillsExistingIgnoreHistory(t *testing.T) {
+	database, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx := context.Background()
+	author := &models.Author{Name: "External Author"}
+	if err := NewAuthorRepo(database).Create(ctx, author); err != nil {
+		t.Fatal(err)
+	}
+	book := &models.Book{AuthorID: author.ID, Title: "Title", ForeignID: "OL1W"}
+	if err := NewBookRepo(database).Create(ctx, book); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewCalibreAuditRepo(database)
+	finding := models.CalibreAuditFinding{BookID: book.ID, CalibreID: 1, Field: models.CalibreAuditFieldTitle,
+		FindingType: models.CalibreAuditTitleDifference, Assessment: models.CalibreAuditAmbiguous,
+		ComparisonFingerprint: "original", State: models.CalibreAuditUnresolved}
+	if _, err := repo.Apply(ctx, []models.CalibreAuditFinding{finding}); err != nil {
+		t.Fatal(err)
+	}
+	old, err := repo.List(ctx)
+	if err != nil || len(old) != 1 {
+		t.Fatalf("old finding: %+v %v", old, err)
+	}
+	if ok, err := repo.Ignore(ctx, old[0].ID, "original"); err != nil || !ok {
+		t.Fatalf("old ignore: %v %v", ok, err)
+	}
+	// Simulate the schema and row as they appeared before migration 094.
+	for _, query := range []string{
+		`DROP TABLE calibre_audit_decisions`,
+		`DELETE FROM schema_migrations WHERE version = 94`,
+	} {
+		if _, err := database.ExecContext(ctx, query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ok, err := repo.Reopen(ctx, old[0].ID, "original"); err == nil || ok {
+		t.Fatalf("reopen must roll back if its decision cannot be recorded: %v %v", ok, err)
+	}
+	if rows, err := repo.List(ctx); err != nil || len(rows) != 1 || rows[0].State != models.CalibreAuditIgnored {
+		t.Fatalf("failed reopen changed pre-upgrade state: %+v %v", rows, err)
+	}
+	if err := migrate(database); err != nil {
+		t.Fatalf("migrate ignored finding: %v", err)
+	}
+	page, _, err := repo.ListPage(ctx, CalibreAuditListOpts{Limit: 10})
+	if err != nil || len(page) != 1 || page[0].State != models.CalibreAuditIgnored || len(page[0].Decisions) != 1 ||
+		page[0].Decisions[0].Action != "ignore" || page[0].Decisions[0].ComparisonFingerprint != "original" {
+		t.Fatalf("pre-existing ignore lost after migration: %+v %v", page, err)
 	}
 }
 

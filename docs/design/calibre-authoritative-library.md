@@ -309,15 +309,18 @@ Findings contain the linked Bindery/Calibre IDs, field/type, original values,
 stored-source labels and IDs, match method/confidence, a reason and a state.
 They live in Bindery's finding table, **not** as a shadow Calibre catalogue.
 `unresolved` can be human-marked `ignored` with an optimistic fingerprint
-check. A recheck keeps the ignore only when normalized compared values, current
-match method/confidence and relevant provider edition/series identity are
-unchanged; formatting-only evidence updates retain it. If a match temporarily
-disappears, the finding becomes `unmatched` while retaining the ignored
-fingerprint, so the *identical* comparison can restore the ignore. Changed
-values or match evidence reopen it. Equal current values make a previous
-finding `resolved`; a missing confident match or lost comparable evidence makes
-it `unmatched`, not clean. No HTTP review endpoint or UI was included in #6;
-#7 supplies them without changing the audit's lifecycle rules.
+check. Subsequent rechecks refresh the evidence underneath an ignored finding
+without silently reopening it, even when material values or match method change
+for the same owned Calibre book. If a match temporarily disappears, the finding
+becomes historical `unmatched` while retaining the prior ignore; a returning
+comparison for the same owned book restores it. A match to a different Calibre
+book does not inherit that ignore. A reviewer may explicitly Reopen the currently
+ignored comparison, clearing the active ignore but retaining the earlier human
+decision in append-only history. Equal current values still make a previous
+finding `resolved` automatically; a missing confident match or lost comparable
+evidence makes it `unmatched`, not clean. The fingerprint guards the exact
+comparison visible when a reviewer acts; it no longer acts as an automatic
+reopen trigger. #7 supplies the review API/UI and #26 extends its lifecycle.
 
 The standalone audit reads Calibre's headers/authors/formats/identifiers/language
 in five bulk SQL queries (plus the read-only open probe), without a per-book
@@ -334,28 +337,50 @@ cross-references using the in-memory `LibraryIndex` snapshot without any
 per-reference Calibre reads (`GetBook` / `FindByIdentifier`). The standalone `Audit`
 method shares that same single-snapshot model.
 
-### Review queue (#7)
+### Review queue (#7, #26)
 
 Admins see **Activity → Calibre audit** (and a Settings → Calibre link) only
 when authoritative mode and a library path are configured. With the mode off,
 review endpoints return 404 and the ordinary app/navigation stays unchanged.
 The default queue shows unresolved findings; reviewers may filter by state,
-finding type and assessment, including historical `unmatched`/`resolved` rows.
-Each row shows Calibre's authoritative evidence beside stored external provider
-evidence, original source/provenance, match method/confidence, and audit reason.
-An ambiguous comparison is explicitly labelled; unmatched rows are historical,
-not proof of a current mismatch.
+finding type, assessment and identifier scope (work/provider vs ISBN/ASIN/
+OpenLibrary edition). This scope is a **review-only taxonomy** for identifier
+findings, not an edition-identity or confidence calculation: `asin` findings
+come from provider-identified ebook editions, while a Calibre ASIN alone may
+refer to another format and does not establish the owned edition. The
+`edition` filter selects edition-oriented discrepancies for human review; it
+never promotes a claim to an exact edition match. Quick queues separate
+current needs-review comparisons, ambiguous edition identifiers, ignored
+findings and historical unmatched rows.
+Historical rows display last recorded values, not confirmed current mismatches;
+current comparisons remain advisory, not automatically actionable corrections.
+Compact source labels distinguish Calibre, provider work/edition, and discovered
+provider evidence. Valid provider-native IDs link to canonical records only
+where a safe URL is known (OpenLibrary work/edition/author, Google volume,
+Hardcover nonnumeric slug, DNB numeric record). Unsupported IDs stay plain text.
+Ownership-match confidence is labelled separately from edition confidence;
+identity context is fetched on demand from the existing admin endpoint rather
+than querying per finding on a large review page. Candidate editions are never
+presented as confirmed owned editions. Review actions are per finding; there is
+no bulk mutation of ambiguous evidence.
 
 Admin-only API routes under `/api/v1/calibre/audit`:
 
-- `GET ?state=&findingType=&assessment=&limit=&offset=` returns
-  `{items,total,limit,offset}` with newest-first stable ordering; default 50,
-  maximum 250 rows. The SQL counts filtered matches and decodes only one page,
-  using a single join to display the Bindery work title. No Calibre metadata is
-  copied into the Bindery catalogue.
+- `GET ?state=&findingType=&assessment=&identifierScope=&limit=&offset=`
+  returns `{items,total,limit,offset}` with newest-first stable ordering;
+  default 50, maximum 250 rows. SQL counts filtered matches and decodes only
+  one page, using a single join for the work title; one additional bounded
+  query loads review decisions for that page only. No Calibre metadata is copied
+  into the Bindery catalogue.
 - `POST /{id}/ignore` takes `{comparisonFingerprint}` and returns 204 only for
   the displayed, still-unresolved comparison; a stale decision returns 409.
-  The existing #6 fingerprint lifecycle continues to govern later rechecks.
+- `POST /{id}/reopen` takes the current `{comparisonFingerprint}` and returns
+  204 only for an ignored, still-current comparison; stale or non-ignored rows
+  return 409. Both actions are admin-only, atomic with an append-only event in
+  Bindery (migration 094). Existing ignored rows get one migration-time event;
+  older decisions that are no longer represented cannot be reconstructed.
+  Reopening clears the active ignore, never edits Calibre metadata, and runs the
+  optional mismatch-tag projection after commit, just like Ignore.
 - `POST /recheck` accepts a full audit of a read-only snapshot as a
   shutdown-tracked background task (`202 {running,startedAt}`); duplicate manual
   starts return `409` with the running snapshot. `GET /recheck/status` returns
