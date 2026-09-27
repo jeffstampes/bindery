@@ -66,6 +66,15 @@ func (h *stubIntegrationHandler) Identity(w http.ResponseWriter, _ *http.Request
 func (h *stubIntegrationHandler) ScanArtifacts(w http.ResponseWriter, _ *http.Request) {
 	h.record("scan-artifacts", w)
 }
+func (h *stubIntegrationHandler) IdentifierProposals(w http.ResponseWriter, _ *http.Request) {
+	h.record("identifier-proposals", w)
+}
+func (h *stubIntegrationHandler) IdentifierAdd(w http.ResponseWriter, _ *http.Request) {
+	h.record("identifier-add", w)
+}
+func (h *stubIntegrationHandler) IdentifierAttempts(w http.ResponseWriter, _ *http.Request) {
+	h.record("identifier-attempts", w)
+}
 
 // newIntegrationRouter wires the three integration route helpers onto a fresh
 // router with one shared stub, mirroring how main.go mounts them.
@@ -105,6 +114,9 @@ func TestIntegrationRoutesRequireAdmin(t *testing.T) {
 		{"calibre reconciliation status", http.MethodGet, "/calibre/reconciliation/status"},
 		{"calibre audit ignore", http.MethodPost, "/calibre/audit/1/ignore"},
 		{"calibre audit reopen", http.MethodPost, "/calibre/audit/1/reopen"},
+		{"calibre identifier proposals", http.MethodGet, "/calibre/audit/1/identifier-proposals"},
+		{"calibre identifier add", http.MethodPost, "/calibre/audit/1/identifier-add"},
+		{"calibre identifier attempts", http.MethodGet, "/calibre/audit/1/identifier-attempts"},
 		{"calibre identity evidence", http.MethodGet, "/calibre/identity/1"},
 		{"calibre artifact scan", http.MethodPost, "/calibre/identity/1/scan"},
 	}
@@ -151,6 +163,9 @@ func TestIntegrationRoutesAllowAdmin(t *testing.T) {
 		{http.MethodGet, "/calibre/reconciliation/status", "reconcile-status"},
 		{http.MethodPost, "/calibre/audit/1/ignore", "ignore"},
 		{http.MethodPost, "/calibre/audit/1/reopen", "reopen"},
+		{http.MethodGet, "/calibre/audit/1/identifier-proposals", "identifier-proposals"},
+		{http.MethodPost, "/calibre/audit/1/identifier-add", "identifier-add"},
+		{http.MethodGet, "/calibre/audit/1/identifier-attempts", "identifier-attempts"},
 		{http.MethodGet, "/calibre/identity/1", "identity"},
 	}
 	for _, tt := range tests {

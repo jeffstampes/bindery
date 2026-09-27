@@ -501,12 +501,12 @@ func (h *SettingsHandler) validateSettingDependencies(ctx context.Context, key, 
 		if s, _ := h.settings.Get(ctx, SettingCalibreLibraryPath); s == nil || strings.TrimSpace(s.Value) == "" {
 			return fmt.Errorf("calibre.authoritative_library_enabled requires calibre.library_path — set the Calibre library path first")
 		}
-	case SettingCalibreAuditTagWriteEnabled:
+	case SettingCalibreAuditTagWriteEnabled, SettingCalibreIdentifierWriteEnabled:
 		if !strings.EqualFold(value, "true") {
 			return nil
 		}
 		if s, _ := h.settings.Get(ctx, SettingCalibreAuthoritativeLibraryEnabled); s == nil || !strings.EqualFold(s.Value, "true") {
-			return fmt.Errorf("calibre.audit_tag_write_enabled requires calibre.authoritative_library_enabled — enable authoritative mode first")
+			return fmt.Errorf("%s requires calibre.authoritative_library_enabled — enable authoritative mode first", key)
 		}
 	case SettingCalibreLibraryPath:
 		// The same rule from the other side: clearing the library path while
@@ -757,9 +757,9 @@ func validateSettingValue(key, value string) error {
 		default:
 			return fmt.Errorf("import.mode %q is not one of: auto, move, copy, hardlink, external", value)
 		}
-	case SettingCalibreAuthoritativeLibraryEnabled, SettingCalibreAuditTagWriteEnabled:
-		// Both opt-ins are independent, canonical boolean settings. Unset
-		// leaves the audit tag writer completely disabled.
+	case SettingCalibreAuthoritativeLibraryEnabled, SettingCalibreAuditTagWriteEnabled, SettingCalibreIdentifierWriteEnabled:
+		// All opt-ins are independent, canonical boolean settings. Unset
+		// leaves each write capability completely disabled.
 		if value == "" || strings.EqualFold(value, "true") || strings.EqualFold(value, "false") {
 			return nil
 		}

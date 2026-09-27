@@ -189,6 +189,41 @@ export interface CalibreAuditPage {
   offset: number
 }
 
+// Server-authored, advisory work-level identifier additions. The write endpoint
+// accepts only the value and the comparison fingerprint, never a client-chosen type.
+export interface CalibreIdentifierProposal {
+  findingId: number
+  bookId: number
+  calibreId: number
+  comparisonFingerprint: string
+  identifierType: string
+  currentValue: string
+  proposedValue: string
+  action: string
+  evidenceKeys: string[]
+  evidence: CalibreAuditEvidence[]
+  reason: string
+}
+
+export interface CalibreIdentifierAddResult {
+  attemptId: number
+  outcome: string
+  reauditError?: string
+}
+
+export interface CalibreIdentifierAttempt {
+  id: number
+  actorUserId: number
+  identifierType: string
+  oldValue: string
+  proposedValue: string
+  evidenceKeys: string[]
+  action: 'add' | 'replace' | 'remove'
+  outcome: 'pending' | 'applied' | 'failed' | 'rejected'
+  error?: string
+  createdAt: string
+}
+
 export interface CalibreAuditResult {
   totalCalibreBooks: number
   comparedBooks: number
@@ -260,6 +295,12 @@ export const calibreApi = {
     request<void>(`/calibre/audit/${id}/ignore`, { method: 'POST', body: JSON.stringify({ comparisonFingerprint }) }),
   calibreAuditReopen: (id: number, comparisonFingerprint: string) =>
     request<void>(`/calibre/audit/${id}/reopen`, { method: 'POST', body: JSON.stringify({ comparisonFingerprint }) }),
+  calibreAuditIdentifierProposals: (id: number) =>
+    request<{ items: CalibreIdentifierProposal[] }>(`/calibre/audit/${id}/identifier-proposals`),
+  calibreAuditIdentifierAdd: (id: number, body: { comparisonFingerprint: string; proposedValue: string }) =>
+    request<CalibreIdentifierAddResult>(`/calibre/audit/${id}/identifier-add`, { method: 'POST', body: JSON.stringify(body) }),
+  calibreAuditIdentifierAttempts: (id: number) =>
+    request<{ items: CalibreIdentifierAttempt[] }>(`/calibre/audit/${id}/identifier-attempts`),
   calibreAuditIdentity: (bookId: number) => request<CalibreIdentitySnapshot>(`/calibre/identity/${bookId}`),
   calibreAuditRecheck: () => request<CalibreAuditRecheckStatus>('/calibre/audit/recheck', { method: 'POST' }),
   calibreAuditRecheckStatus: () => request<CalibreAuditRecheckStatus>('/calibre/audit/recheck/status'),
