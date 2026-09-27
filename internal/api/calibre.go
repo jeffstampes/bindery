@@ -39,9 +39,12 @@ const (
 	SettingCalibreAuthoritativeLibraryEnabled = "calibre.authoritative_library_enabled"
 	// SettingCalibreAuditTagWriteEnabled independently opts in to managing the
 	// sole Bindery-owned audit tag on existing Calibre books. Unset is off.
-	SettingCalibreAuditTagWriteEnabled = "calibre.audit_tag_write_enabled"
-	SettingCalibrePluginURL            = "calibre.plugin_url"
-	SettingCalibrePluginAPIKey         = "calibre.plugin_api_key"
+	// Identifier writes are a separate, default-off opt-in from both the
+	// authoritative read path and the mismatch-tag projection.
+	SettingCalibreIdentifierWriteEnabled = "calibre.identifier_write_enabled"
+	SettingCalibreAuditTagWriteEnabled   = "calibre.audit_tag_write_enabled"
+	SettingCalibrePluginURL              = "calibre.plugin_url"
+	SettingCalibrePluginAPIKey           = "calibre.plugin_api_key"
 	// SettingCalibrePushPathRemap translates Bindery library paths to the
 	// prefix the Calibre (Bridge plugin) container sees before a push, in
 	// pathmap "from:to[,from:to]" form — e.g. "/books:/mnt/user/media/books".

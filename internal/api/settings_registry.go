@@ -341,6 +341,11 @@ var settingDescriptors = []SettingDescriptor{
 		State:       SettingStateActive,
 	},
 	{
+		Key: SettingCalibreIdentifierWriteEnabled, Type: SettingTypeBool, Default: "false",
+		Description: "Independently opt in to human-approved, evidence-backed additions of missing work/provider identifiers to matched Calibre books. Requires authoritative mode; no unattended synchronization.",
+		State:       SettingStateActive,
+	},
+	{
 		Key: "calibre.last_import_at", Type: SettingTypeString, Default: "",
 		Description: "RFC3339 timestamp of the last Calibre library import, written by the importer and shown on the Calibre settings tab.",
 		State:       SettingStateInternal,

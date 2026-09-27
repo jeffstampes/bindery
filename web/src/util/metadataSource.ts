@@ -9,6 +9,23 @@
 
 export type MetadataSourceLink = { url: string; label: string }
 
+// Audit evidence needs provider-aware parsing: plain identifiers such as ISBNs
+// must never be guessed to be OpenLibrary URLs. Accept only known native IDs.
+export function auditProviderRecordLink(e: { source: string; value: string; provider?: string; foreignId?: string }): MetadataSourceLink | null {
+  const calibreID = e.source.startsWith('calibre.identifiers.')
+  const provider = calibreID ? e.source.slice('calibre.identifiers.'.length).toLowerCase() : e.provider?.toLowerCase()
+  const rawID = (calibreID ? e.value : e.foreignId)?.trim() ?? ''
+  const id = provider === 'google' || provider === 'googlebooks'
+    ? (rawID.startsWith('gb:') ? rawID : `gb:${rawID}`)
+    : provider === 'dnb' ? (rawID.startsWith('dnb:') ? rawID : `dnb:${rawID}`)
+      : provider === 'hardcover' ? (rawID.startsWith('hc:') ? rawID : `hc:${rawID}`) : rawID
+  if (['openlibrary', 'openlibrary_work', 'openlibrary_edition', 'ol'].includes(provider ?? '') && /^OL\d+[WMA]$/.test(id)) return metadataSourceLink(id, id.endsWith('A') ? 'author' : 'book')
+  if ((provider === 'googlebooks' || provider === 'google') && /^gb:[A-Za-z0-9_-]+$/.test(id)) return metadataSourceLink(id, 'book')
+  if (provider === 'hardcover' && /^hc:[a-z0-9][a-z0-9-]*$/i.test(id)) return metadataSourceLink(id, 'book')
+  if (provider === 'dnb' && /^dnb:\d+$/.test(id)) return metadataSourceLink(id, 'book')
+  return null
+}
+
 export function metadataSourceLink(
   foreignId: string | undefined | null,
   kind: 'author' | 'book',

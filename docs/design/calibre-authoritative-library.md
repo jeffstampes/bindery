@@ -1,6 +1,6 @@
 # Calibre/CWA authoritative-library mode — design contract
 
-Status: **accepted, implemented through optional mismatch-tag write-back (#8).**
+Status: **accepted, implemented through the separately opted-in identifier-add path (#28).**
 The configuration and implemented slices below are part of this branch.
 
 Tracking: [#1](https://github.com/jeffstampes/bindery/issues/1) ·
@@ -56,10 +56,10 @@ is out of scope for authoritative-library mode.
    their current semantics. Turning the mode on must not silently disable any of
    them either; where they genuinely conflict, say so in the UI rather than
    reaching in.
-3. **`metadata.db` is read-only for the core feature.** The authoritative
-   reader opens Calibre's database for reading only. The separately opted-in
-   #8 mismatch-tag writer is the sole sanctioned exception; it has no access
-   to the reader's handle and cannot change curated metadata fields.
+3. **`metadata.db` stays read-only for the core feature.** The authoritative
+   reader opens Calibre's database for reading only. The independently opted-in
+   #8 mismatch-tag writer and #28 identifier-add writer are separately bounded
+   exceptions; neither shares the reader's handle.
 4. **Presence in Calibre is not an import.** A Calibre book does not become a
    Bindery catalogue book merely because it exists in the owned library. That is
    precisely what the existing library import does, and it is what this mode
@@ -74,35 +74,37 @@ is out of scope for authoritative-library mode.
 7. **Discrepancies are advisory and human-reviewed.** An audit may report that
    Calibre's series index disagrees with a provider's. It may not act on that
    disagreement.
-8. **Writes back to Calibre are a separate, narrow capability.** Management
-   of the single Bindery-owned `BinderyMismatch` tag is independently opt-in and
-   is the **sole sanctioned Calibre metadata write-back exception**. It never
-   edits an operator's curated fields or replaces unrelated tags.
+8. **Writes back to Calibre are separate, narrow capabilities.** The fixed
+   `BinderyMismatch` tag is independently opt-in; #28 adds a second independent
+   opt-in for human-approved additions of missing, rooted work/provider IDs.
+   Neither path replaces arbitrary curated metadata or changes ebook files.
 9. **Large libraries are the normal case.** The motivating library is ~80,000
    books. Any design that is only tractable at a few thousand does not satisfy
    this contract.
 
 ## Configuration
 
-Two independent opt-ins, through Bindery's existing settings machinery — no
-new handler, environment variable, or migration.
+Three independent opt-ins, through Bindery's existing settings machinery — no
+new handler, environment variable, or configuration migration.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `calibre.authoritative_library_enabled` | bool | `false` | Calibre/CWA is authoritative for the metadata of books it already holds |
 | `calibre.audit_tag_write_enabled` | bool | `false` | Manage only the `BinderyMismatch` tag for actionable audit findings; requires authoritative mode |
+| `calibre.identifier_write_enabled` | bool | `false` | Permit individually approved, evidence-backed additions of missing work/provider identifiers; requires authoritative mode |
 
 - Read and written through `GET`/`PUT /api/v1/setting/{key}` like every other
   setting, and described in the settings registry
   (`GET /api/v1/settings/descriptors`), so it is typed, defaulted and
   discoverable without a client hard-coding it.
 - The authoritative opt-in is rendered on **Settings → Calibre** under the
-  read-side section next to Library import. The separate audit-tag opt-in is
-  available through the typed settings API (no new UI control).
-- Both accept `true`, `false`, and empty/unset (off); invalid values such as
-  `yes` are rejected. Enabling tag writes requires authoritative mode already
-  enabled. Turning authoritative mode off always stops tag writes even if the
-  tag-write setting remains stored; turning tag writes off never removes tags.
+  read-side section next to Library import. The separate audit-tag and
+  identifier-write opt-ins are available through the typed settings API.
+- All three accept `true`, `false`, and empty/unset (off); invalid values
+  such as `yes` are rejected. Enabling either write capability requires
+  authoritative mode already enabled. Turning authoritative mode off stops
+  both write paths even if their settings remain stored; disabling either
+  write setting never reverts edits already made.
 
 ### Dependency rule
 
@@ -120,7 +122,7 @@ an instance can never be locked into it.
 | Setting | Interaction |
 |---|---|
 | `calibre.library_path` | Shared. Authoritative-library mode reads `metadata.db` from it, read-only. Required by the dependency rule above |
-| `calibre.library_import_enabled` | Mutually exclusive in execution. When `calibre.authoritative_library_enabled = true`, scheduled and manual Calibre sync operations execute authoritative reconciliation (`Reconcile`) using a read-only `metadata.db` snapshot and update cross-references, bypassing legacy catalogue import so shadow Book rows are never imported. The independent audit-tag opt-in may then manage only its tag after the audit commits. When authoritative mode is disabled (`false`), legacy library import executes as before |
+| `calibre.library_import_enabled` | Mutually exclusive in execution. When `calibre.authoritative_library_enabled = true`, scheduled and manual Calibre sync operations execute authoritative reconciliation (`Reconcile`) using a read-only `metadata.db` snapshot and update cross-references, bypassing legacy catalogue import so shadow Book rows are never imported. The independent audit-tag opt-in may then manage only its tag after the audit commits. Identifier adds require a separate review action and are never part of that pass. When authoritative mode is disabled (`false`), legacy library import executes as before |
 | `calibre.mode` (write integration) | Unaffected. Registering a *newly acquired* book with Calibre is Bindery handing over a book Calibre does not yet have, which does not cross the authority boundary |
 | `cwa.ingest_path` | Unaffected, for the same reason |
 | `import.mode = external` | Unaffected. Complementary, if anything: the external tool owning the library is the topology this mode is designed around |
@@ -137,11 +139,12 @@ Each slice is checked against the authority invariants above.
 | Metadata audit | Implemented (#6) | Compare Calibre's metadata for owned books against stored external evidence and persist advisory findings | 6, 7, 9 |
 | Audit/review UI | Implemented (#7) | Admin review queue with bounded, filtered findings and ignore/recheck actions | 7 |
 | `BinderyMismatch` write-back | Implemented (#8) | Optional, separately opt-in, one fixed Bindery-owned tag | 3, 8 |
+| Human-approved identifier additions | Implemented (#28; additions only) | Separately opted-in review/approval of uniquely supported missing work/provider IDs; no replacement, removal, edition resolution or bulk | 3, 7, 8 |
 
 Reconciliation satisfies ebook ownership for confident matches and runs the
 backend metadata audit. It creates no Calibre-backed catalogue book. The
-review UI never edits curated metadata; optional #8 tag management is the
-sole sanctioned write-back exception.
+review UI never edits curated metadata by itself; the optional #8 tag writer
+and individually approved #28 identifier additions are separate exceptions.
 
 ### Author detail, Search wanted, and book detail (#18, #20)
 
@@ -443,9 +446,10 @@ No Calibre/CWA curated field or ebook file is modified.
 `calibre.authoritative_library_enabled`. Enable it with an admin `PUT
 /api/v1/setting/calibre.audit_tag_write_enabled` and body `{"value":"true"}`
 only after configuring authoritative mode and a writable Calibre library.
-There is no tag-name or field-name setting. Management of `BinderyMismatch`
-is the **sole sanctioned Calibre metadata write-back exception**; ownership,
-matching and review still work when it is off. Disabling it stops all tag
+There is no tag-name or field-name setting. This tag writer touches only
+`BinderyMismatch`; the separately opted-in identifier-add writer below is a
+second, disjoint exception. Ownership, matching and review still work when
+this setting is off. Disabling it stops all tag
 writes, including removals; it does not clean up existing tags.
 
 The desired tag set comes from committed finding rows: one or more
@@ -483,6 +487,68 @@ projection even if zero findings changed. No Bindery transaction remains open
 during external writes. The shared service mutex serializes audits,
 reconciliation and review projection within one Bindery process; independent
 Bindery instances should not both manage the same library's tag.
+
+### Human-approved CWA identifier additions (#28)
+
+This is a **different, default-off opt-in** (`calibre.identifier_write_enabled`)
+from authoritative reads and the mismatch-tag writer. An admin must explicitly
+preview a current missing-identifier finding at `GET
+/api/v1/calibre/audit/{id}/identifier-proposals` and approve one returned value
+via `POST /api/v1/calibre/audit/{id}/identifier-add` with its
+`comparisonFingerprint` and `proposedValue`. `GET
+/api/v1/calibre/audit/{id}/identifier-attempts` lists recent attempts for
+inspection/retry decisions. The UI shows missing → proposed, rooted evidence,
+provider record links where a safe direct URL exists, and a distinct approval
+control; following a link is navigation only. A stale fingerprint/value returns
+409; no browser-supplied field, Calibre ID, evidence ID or SQL is authoritative.
+
+Eligibility is deliberately narrower than advisory audit comparison: the
+finding must be current, unresolved, `needs_review`, `identifier_missing`, and
+work-level (Open Library work, Google, Hardcover or DNB only); its only proposed
+value must be confirmed by a fresh exact canonical provider record or high
+confidence ISBN lookup rooted in that record. The Bindery work and its exact or
+high, currently matched Calibre ownership link must still agree with the
+read-only live Calibre snapshot and persisted rooted evidence. CWA claims do
+not seed or corroborate provider identity. Edition IDs, ISBNs, ASINs, artifact
+ISBNs and other file observations cannot authorize a write: Polish Books may
+have copied CWA values into an ebook and these observations do not yet prove
+independence. Existing identifiers cannot be replaced or removed; #29 must
+resolve the owned edition before any higher-risk path. No bulk or unattended
+write is implemented: an aggregate finding count alone does not prove every
+row independently meets the rooted threshold.
+
+**Mutation boundary.** `internal/db/calibre_identifier_writer.go` has one
+public mutation, `AddMissing(ctx, Calibre book ID, fixed-allowlisted provider
+type, validated value)`, bound to a library root at construction. It opens a *separate* `metadata.db` handle in
+`mode=rw` (no database creation), checks Calibre's `application_id` (`cali`),
+starts a `BEGIN IMMEDIATE` transaction, verifies the book exists and that no
+record for its identifier type or another book's same type/value exists, then
+executes a parameterized, conditional **`INSERT INTO identifiers (book, type,
+val)`**. The service reruns the live ownership match, book fingerprint and
+rooted-evidence check while the SQLite write reservation is held, so another
+Calibre edit cannot invalidate approval between validation and insert.
+Canonical type aliases and supported stored prefixes are considered when
+checking type occupancy and duplicate work claims. It commits only when exactly
+one row is inserted; any error or failed
+precondition rolls back. It does not expose its connection or generic SQL, and
+contains no UPDATE or DELETE of Calibre rows. No `books`, `tags`,
+`books_tags_link`, formats, authors, language, cover, ebook file or other table
+is a writer target; tests exercise preservation of unrelated rows and values.
+External Calibre writers may contend on the SQLite lock; `busy_timeout` is
+bounded to five seconds and errors leave the finding/evidence intact. Calibre
+apps caching metadata may need a refresh to display the added ID.
+
+Migration 095 stores attempted adds in Bindery with actor user ID (0 when no
+user ID is available), finding/ownership IDs, field, old/new value, evidence
+keys, action, time, outcome and error. An intent is stored as `pending` before
+opening a writable Calibre handle; rejected or failed attempts are retained.
+Only a committed Calibre write is marked `applied`; an interrupted attempt
+remains pending, not falsely successful, and must be inspected before retrying.
+After commit an ordinary audit re-reads Calibre and resolves the finding only
+if its current comparison agrees. If the re-audit fails, the committed write
+remains recorded and the operator can use the existing recheck route. Human
+ignore/reopen history and identity evidence are never rewritten by a failed
+identifier transaction.
 
 ## Decisions worth restating
 

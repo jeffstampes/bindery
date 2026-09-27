@@ -14,15 +14,16 @@ import (
 // AuthoritativeService provides the narrow ownership abstraction and reconciliation
 // integration for Calibre/CWA authoritative-library mode (#5).
 type AuthoritativeService struct {
-	settings       *db.SettingsRepo
-	crossRef       *db.CalibreCrossReferenceRepo
-	books          *db.BookRepo
-	editions       *db.EditionRepo
-	audits         *db.CalibreAuditRepo
-	identity       *db.CalibreIdentityRepo
-	artifacts      *db.CalibreArtifactRepo
-	identitySource identityDiscoverer
-	readerFactory  func(string) (AuthoritativeLibrary, error)
+	settings           *db.SettingsRepo
+	crossRef           *db.CalibreCrossReferenceRepo
+	books              *db.BookRepo
+	editions           *db.EditionRepo
+	audits             *db.CalibreAuditRepo
+	identity           *db.CalibreIdentityRepo
+	identifierAttempts *db.CalibreIdentifierAttemptRepo
+	artifacts          *db.CalibreArtifactRepo
+	identitySource     identityDiscoverer
+	readerFactory      func(string) (AuthoritativeLibrary, error)
 	// Serialize long audit snapshots and authoritative reconciliation within
 	// the single service instance shared by scheduled/manual runs. Otherwise a
 	// slower pass could commit older findings after a newer pass.

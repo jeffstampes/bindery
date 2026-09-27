@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { api, ApiError, type CalibreAuditEvidence, type CalibreAuditFinding, type CalibreAuditRecheckStatus, type CalibreIdentitySnapshot, type CalibreReconciliationStatus } from '../api/client'
-import { metadataSourceLink, providerDisplayName } from '../util/metadataSource'
+import {
+  api,
+  ApiError,
+  type CalibreAuditEvidence,
+  type CalibreAuditFinding,
+  type CalibreAuditRecheckStatus,
+  type CalibreIdentitySnapshot,
+  type CalibreReconciliationStatus,
+  type CalibreIdentifierProposal,
+  type CalibreIdentifierAttempt,
+} from '../api/client'
+import { auditProviderRecordLink, providerDisplayName } from '../util/metadataSource'
 import Pagination from '../components/Pagination'
 import { useServerPagination } from '../components/usePagination'
 
@@ -24,19 +34,20 @@ function cwaBookURL(base: string, id: number): string | null {
 }
 
 const EDITION_IDS = new Set(['isbn', 'asin', 'openlibrary_edition'])
+const WORK_IDS = new Set(['openlibrary', 'google', 'hardcover', 'dnb'])
 
-function providerRecordLink(e: CalibreAuditEvidence) {
-  const calibreID = e.source.startsWith('calibre.identifiers.')
-  const provider = calibreID ? e.source.slice('calibre.identifiers.'.length).toLowerCase() : e.provider?.toLowerCase()
-  const rawID = (calibreID ? e.value : e.foreignId)?.trim() ?? ''
-  const id = provider === 'google' || provider === 'googlebooks'
-    ? (rawID.startsWith('gb:') ? rawID : `gb:${rawID}`)
-    : provider === 'dnb' ? (rawID.startsWith('dnb:') ? rawID : `dnb:${rawID}`) : rawID
-  if (['openlibrary', 'openlibrary_work', 'openlibrary_edition', 'ol'].includes(provider ?? '') && /^OL\d+[WMA]$/.test(id)) return metadataSourceLink(id, id.endsWith('A') ? 'author' : 'book')
-  if ((provider === 'googlebooks' || provider === 'google') && /^gb:[A-Za-z0-9_-]+$/.test(id)) return metadataSourceLink(id, 'book')
-  if (provider === 'hardcover' && /^hc:[a-z0-9][a-z0-9-]*$/i.test(id)) return metadataSourceLink(id, 'book')
-  if (provider === 'dnb' && /^dnb:\d+$/.test(id)) return metadataSourceLink(id, 'book')
-  return null
+function eligibleForIdentifierAdd(finding: CalibreAuditFinding): boolean {
+  return finding.state === 'unresolved' && finding.assessment === 'needs_review' &&
+    finding.findingType === 'identifier_missing' && finding.field === 'identifiers' &&
+    WORK_IDS.has(finding.evidenceKey.toLowerCase())
+}
+
+function eligibleProposal(finding: CalibreAuditFinding, proposal: CalibreIdentifierProposal): boolean {
+  return proposal.findingId === finding.id && proposal.bookId === finding.bookId &&
+    proposal.calibreId === finding.calibreId && proposal.comparisonFingerprint === finding.comparisonFingerprint &&
+    proposal.action === 'add' && !proposal.currentValue.trim() && !!proposal.proposedValue.trim() &&
+    proposal.identifierType.toLowerCase() === finding.evidenceKey.toLowerCase() &&
+    WORK_IDS.has(proposal.identifierType.toLowerCase())
 }
 
 function Evidence({ values }: { values: CalibreAuditEvidence[] }) {
@@ -49,7 +60,7 @@ function Evidence({ values }: { values: CalibreAuditEvidence[] }) {
       : e.source.startsWith('book_identifiers.') ? 'linkedIdentifier'
       : e.source.startsWith('authors.') ? 'author'
       : e.source.startsWith('series') ? 'series' : 'work'
-    const record = providerRecordLink(e)
+    const record = auditProviderRecordLink(e)
     const ownedIdentifier = e.source.startsWith('calibre.identifiers.')
     return <li key={index} className="break-words">
       <span className="font-medium">{record && ownedIdentifier
@@ -91,10 +102,113 @@ function IdentityContext({ finding }: { finding: CalibreAuditFinding }) {
   </div>
 }
 
-function Finding({ finding, cwaURL, busy, onIgnore, onReopen }: {
+function IdentifierAdd({ finding, busy, onRefresh, onNotice }: { finding: CalibreAuditFinding; busy: boolean; onRefresh: () => void; onNotice: (outcome: string, error: string) => void }) {
+  const { t } = useTranslation()
+  const [proposals, setProposals] = useState<CalibreIdentifierProposal[] | null>(null)
+  const [selected, setSelected] = useState<number | null>(null)
+  const [approved, setApproved] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [applying, setApplying] = useState(false)
+  const [error, setError] = useState('')
+
+  const preview = async () => {
+    setLoading(true); setError(''); onNotice('', ''); setProposals(null); setSelected(null); setApproved(false)
+    try {
+      const data = await api.calibreAuditIdentifierProposals(finding.id)
+      if (data.items.some(item => item.comparisonFingerprint !== finding.comparisonFingerprint || item.findingId !== finding.id)) {
+        onNotice('', t('calibreAudit.stale')); onRefresh(); return
+      }
+      setProposals(data.items.filter(item => eligibleProposal(finding, item)))
+    } catch (err) {
+      const message = err instanceof ApiError && err.status === 409 ? t('calibreAudit.stale') : t('calibreAudit.proposalError', { error: err instanceof Error ? err.message : String(err) })
+      if (err instanceof ApiError && err.status === 409) { onNotice('', message); onRefresh() }
+      else setError(message)
+    } finally { setLoading(false) }
+  }
+  const apply = async () => {
+    const item = selected === null ? null : proposals?.[selected]
+    if (!approved || !item || !eligibleProposal(finding, item) || applying || busy) return
+    setApplying(true); setError(''); onNotice('', '')
+    try {
+      const response = await api.calibreAuditIdentifierAdd(finding.id, {
+        comparisonFingerprint: item.comparisonFingerprint, proposedValue: item.proposedValue,
+      })
+      setProposals(null); setApproved(false); setSelected(null)
+      onNotice(t('calibreAudit.addResult', { outcome: response.outcome, id: response.attemptId }),
+        response.reauditError ? t('calibreAudit.reauditError', { error: response.reauditError }) : '')
+      onRefresh()
+    } catch (err) {
+      setProposals(null); setApproved(false); setSelected(null)
+      const message = err instanceof ApiError && err.status === 409 ? t('calibreAudit.stale')
+        : t('calibreAudit.addError', { error: err instanceof Error ? err.message : String(err) })
+      const id = err instanceof ApiError ? err.body.attemptId : undefined
+      onNotice('', message + (typeof id === 'number' && id > 0 ? ` ${t('calibreAudit.addAttemptReference', { id })}` : ''))
+      onRefresh()
+    } finally { setApplying(false) }
+  }
+
+  return <div className="rounded border border-sky-300 dark:border-sky-800 p-3 space-y-3 text-sm">
+    <button type="button" disabled={busy || loading || applying} onClick={preview} className="text-emerald-700 dark:text-emerald-400 underline disabled:opacity-50">{t('calibreAudit.previewAdd')}</button>
+    {loading && <p role="status">{t('common.loading')}</p>}
+    {error && <p role="alert" className="text-red-600 dark:text-red-400">{error}</p>}
+    {proposals && <div className="space-y-3">
+      <p className="text-fg-muted">{t('calibreAudit.addCaution', { confidence: finding.matchConfidence })}</p>
+      {proposals.length === 0 ? <p>{t('calibreAudit.noProposals')}</p> : <>
+        <fieldset className="space-y-3">
+          <legend className="font-semibold">{t('calibreAudit.selectAddition')}</legend>
+          {proposals.map((item, index) => {
+            const link = auditProviderRecordLink({ source: `calibre.identifiers.${item.identifierType}`, value: item.proposedValue })
+            return <div key={`${item.identifierType}-${item.proposedValue}-${index}`} className="rounded border border-slate-300 dark:border-zinc-700 p-2 space-y-2">
+              <label className="flex items-center gap-2 break-all"><input type="radio" name={`identifier-add-${finding.id}`} checked={selected === index} onChange={() => { setSelected(index); setApproved(false) }} />{item.identifierType} · {item.proposedValue}</label>
+              <p>{t('calibreAudit.existingValue')}: {item.currentValue || t('calibreAudit.noValue')}</p>
+              <p>{t('calibreAudit.proposedValue')}: {link
+                ? <a href={link.url} target="_blank" rel="noopener noreferrer" className="text-emerald-700 dark:text-emerald-400 underline">{item.proposedValue} ↗</a>
+                : item.proposedValue}</p>
+              <p>{t('calibreAudit.reason')}: {item.reason}</p>
+              <div><span className="font-medium">{t('calibreAudit.proposalEvidence')}</span><Evidence values={item.evidence} /></div>
+            </div>
+          })}
+        </fieldset>
+        <label className="flex items-start gap-2"><input type="checkbox" checked={approved} disabled={selected === null || busy || applying} onChange={e => setApproved(e.target.checked)} />{t('calibreAudit.approveAdd')}</label>
+        <button type="button" disabled={!approved || selected === null || busy || applying} onClick={apply} className="rounded bg-emerald-700 text-white px-3 py-2 disabled:opacity-50">{t('calibreAudit.applyAdd')}</button>
+      </>}
+    </div>}
+  </div>
+}
+
+function IdentifierAttemptHistory({ findingId, revision }: { findingId: number; revision: number }) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const [items, setItems] = useState<CalibreIdentifierAttempt[] | null>(null)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    if (!open) return
+    let active = true
+    api.calibreAuditIdentifierAttempts(findingId)
+      .then(data => { if (active) { setItems(data.items); setError('') } })
+      .catch(err => { if (active) setError(t('calibreAudit.attemptHistoryError', { error: err instanceof Error ? err.message : String(err) })) })
+    return () => { active = false }
+  }, [open, findingId, revision, t])
+  return <div className="text-xs">
+    <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="text-emerald-700 dark:text-emerald-400 underline">{t('calibreAudit.attemptHistory')}</button>
+    {open && <div className="mt-2 space-y-1">
+      {error && <p role="alert">{error}</p>}
+      {items?.length === 0 && <p>{t('calibreAudit.noAttempts')}</p>}
+      {items?.map(item => <p key={item.id} className="break-words">{t('calibreAudit.attemptSummary', {
+        id: item.id, action: item.action, field: item.identifierType, value: item.proposedValue, outcome: item.outcome,
+      })} {item.error && t('calibreAudit.attemptFailure', { error: item.error })}</p>)}
+    </div>}
+  </div>
+}
+
+function Finding({ finding, cwaURL, busy, identifierWriteEnabled, revision, onRefresh, onNotice, onIgnore, onReopen }: {
   finding: CalibreAuditFinding
   cwaURL: string
   busy: boolean
+  identifierWriteEnabled: boolean
+  revision: number
+  onRefresh: () => void
+  onNotice: (outcome: string, error: string) => void
   onIgnore: (finding: CalibreAuditFinding) => void
   onReopen: (finding: CalibreAuditFinding) => void
 }) {
@@ -127,6 +241,8 @@ function Finding({ finding, cwaURL, busy, onIgnore, onReopen }: {
     </div>
     {!historical && <p className="text-sm text-fg-muted">{t('calibreAudit.reason')}: {finding.reason}</p>}
     {!historical && <IdentityContext key={finding.comparisonFingerprint} finding={finding} />}
+    {identifierWriteEnabled && eligibleForIdentifierAdd(finding) && <IdentifierAdd key={finding.comparisonFingerprint} finding={finding} busy={busy} onRefresh={onRefresh} onNotice={onNotice} />}
+    <IdentifierAttemptHistory findingId={finding.id} revision={revision} />
     {!!finding.decisions?.length && <details className="text-xs text-fg-muted"><summary className="cursor-pointer">{t('calibreAudit.decisionHistory')}</summary><ul className="mt-1 space-y-1">{finding.decisions.map((decision, i) => <li key={i}>{t(`calibreAudit.actions.${decision.action}`)} · {new Date(decision.createdAt).toLocaleString()}</li>)}</ul></details>}
     <div className="flex flex-wrap gap-3 text-sm">
       {current && <button disabled={busy} onClick={() => onIgnore(finding)} className="text-emerald-700 dark:text-emerald-400 underline disabled:opacity-50">{t('calibreAudit.ignore')}</button>}
@@ -145,9 +261,13 @@ export default function CalibreAuditPage() {
   const [assessment, setAssessment] = useState('')
   const [identifierScope, setIdentifierScope] = useState('')
   const [cwaURL, setCwaURL] = useState('')
+  const [identifierWriteEnabled, setIdentifierWriteEnabled] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [actionError, setActionError] = useState('')
+  const [identifierOutcome, setIdentifierOutcome] = useState('')
+  const [identifierError, setIdentifierError] = useState('')
+  const identifierNotice = (outcome: string, error: string) => { setIdentifierOutcome(outcome); setIdentifierError(error) }
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<CalibreAuditRecheckStatus | null>(null)
   const [reconciliation, setReconciliation] = useState<CalibreReconciliationStatus | null>(null)
@@ -167,6 +287,16 @@ export default function CalibreAuditPage() {
     api.getSetting('cwa.web_url').then(s => { if (active) setCwaURL(s.value) }).catch(() => {})
     return () => { active = false }
   }, [])
+
+  useEffect(() => {
+    let active = true
+    // A missing/unreadable setting is not consent to write; this opt-in is
+    // independent of Calibre's read-only authoritative audit mode.
+    api.getSetting('calibre.identifier_write_enabled')
+      .then(s => { if (active) setIdentifierWriteEnabled(s.value.toLowerCase() === 'true') })
+      .catch(() => { if (active) setIdentifierWriteEnabled(false) })
+    return () => { active = false }
+  }, [revision])
 
   useEffect(() => {
     let active = true
@@ -324,12 +454,14 @@ export default function CalibreAuditPage() {
       <label className="text-sm">{t('calibreAudit.identifierScopeFilter')} <select value={identifierScope} onChange={e => filter(setIdentifierScope, e.target.value)} className="ml-1 rounded border p-1 bg-slate-100 dark:bg-zinc-800"><option value="">{t('common.all')}</option><option value="work">{t('calibreAudit.workIdentifier')}</option><option value="edition">{t('calibreAudit.editionIdentifier')}</option></select></label>
     </div>
     {actionError && <p role="alert" className="text-red-600 dark:text-red-400">{actionError}</p>}
+    {identifierOutcome && <p role="status" aria-label={t('calibreAudit.addStatus')}>{identifierOutcome}</p>}
+    {identifierError && <p role="alert" className="text-red-600 dark:text-red-400">{identifierError}</p>}
     {statusError && <p role="alert" className="text-red-600 dark:text-red-400">{statusError}</p>}
     {status?.running && <p role="status">{alreadyRunning ? t('calibreAudit.alreadyRunning') : accepted ? t('calibreAudit.accepted') : t('calibreAudit.working')}</p>}
     {status?.error && <p role="alert" className="text-red-600 dark:text-red-400">{t('calibreAudit.actionError', { error: status.error })}</p>}
     {status?.result && !status.running && <p role="status">{t('calibreAudit.recheckResult', { compared: status.result.comparedBooks, findings: status.result.findings, updated: status.result.updated })}</p>}
     {!error && !loading && <p className="text-xs text-fg-muted">{t('calibreAudit.matchingCount', { count: total })}</p>}
-    {loading ? <p role="status">{t('common.loading')}</p> : error ? <p role="alert" className="text-red-600 dark:text-red-400">{error}</p> : items.length === 0 ? <p>{t('calibreAudit.empty')}</p> : <ul className="space-y-3">{items.map(f => <Finding key={f.id} finding={f} cwaURL={cwaURL} busy={busy} onIgnore={ignore} onReopen={reopen} />)}</ul>}
+    {loading ? <p role="status">{t('common.loading')}</p> : error ? <p role="alert" className="text-red-600 dark:text-red-400">{error}</p> : items.length === 0 ? <p>{t('calibreAudit.empty')}</p> : <ul className="space-y-3">{items.map(f => <Finding key={f.id} finding={f} cwaURL={cwaURL} busy={busy} identifierWriteEnabled={identifierWriteEnabled} revision={revision} onRefresh={refresh} onNotice={identifierNotice} onIgnore={ignore} onReopen={reopen} />)}</ul>}
     {!error && <Pagination {...paginationProps}
       onPageChange={next => { setLoading(true); paginationProps.onPageChange(next) }}
       onPageSizeChange={next => { setLoading(true); paginationProps.onPageSizeChange(next) }} />}

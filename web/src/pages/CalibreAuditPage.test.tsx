@@ -1,14 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
-import { api, ApiError, type CalibreAuditFinding } from '../api/client'
+import { api, ApiError, type CalibreAuditFinding, type CalibreIdentifierProposal } from '../api/client'
 import CalibreAuditPage from './CalibreAuditPage'
 import en from '../i18n/locales/en.json'
 
 vi.mock('../api/client', async importOriginal => {
   const original = await importOriginal<typeof import('../api/client')>()
   return { ...original, api: { ...original.api,
-    calibreAudit: vi.fn(), calibreAuditIgnore: vi.fn(), calibreAuditReopen: vi.fn(), calibreAuditIdentity: vi.fn(), calibreAuditRecheck: vi.fn(), calibreAuditRecheckStatus: vi.fn(), calibreReconcile: vi.fn(), calibreReconcileStatus: vi.fn(), getSetting: vi.fn(),
+    calibreAudit: vi.fn(), calibreAuditIgnore: vi.fn(), calibreAuditReopen: vi.fn(), calibreAuditIdentity: vi.fn(), calibreAuditRecheck: vi.fn(), calibreAuditRecheckStatus: vi.fn(),
+    calibreReconcile: vi.fn(), calibreReconcileStatus: vi.fn(),
+    calibreAuditIdentifierProposals: vi.fn(), calibreAuditIdentifierAdd: vi.fn(), calibreAuditIdentifierAttempts: vi.fn(), getSetting: vi.fn(),
   } }
 })
 vi.mock('react-i18next', () => {
@@ -28,6 +30,14 @@ const finding: CalibreAuditFinding = {
   comparisonFingerprint: 'fp1', state: 'unresolved', createdAt: '2026-01-01', updatedAt: '2026-01-01',
 }
 
+const missing: CalibreAuditFinding = { ...finding, field: 'identifiers', evidenceKey: 'openlibrary', findingType: 'identifier_missing', assessment: 'needs_review', calibreEvidence: [] }
+const proposal: CalibreIdentifierProposal = {
+  findingId: 3, bookId: 5, calibreId: 17, comparisonFingerprint: 'fp1', identifierType: 'openlibrary',
+  currentValue: '', proposedValue: 'OL12W', action: 'add', evidenceKeys: ['openlibrary:OL12W'],
+  evidence: [{ value: 'OL12W', source: 'books.foreign_id', provider: 'openlibrary', foreignId: 'OL12W' }],
+  reason: 'Canonical provider work record',
+}
+
 function renderPage() { return render(<MemoryRouter><CalibreAuditPage /></MemoryRouter>) }
 
 beforeEach(() => {
@@ -45,6 +55,9 @@ beforeEach(() => {
   vi.mocked(api.calibreAuditRecheckStatus).mockResolvedValue({ running: false })
   vi.mocked(api.calibreReconcile).mockResolvedValue({ state: 'running', stage: 'ownership', completedStages: [] })
   vi.mocked(api.calibreReconcileStatus).mockResolvedValue({ state: 'idle', completedStages: [] })
+  vi.mocked(api.calibreAuditIdentifierProposals).mockResolvedValue({ items: [proposal] })
+  vi.mocked(api.calibreAuditIdentifierAdd).mockResolvedValue({ attemptId: 8, outcome: 'added' })
+  vi.mocked(api.calibreAuditIdentifierAttempts).mockResolvedValue({ items: [] })
 })
 
 describe('CalibreAuditPage', () => {
@@ -103,6 +116,151 @@ describe('CalibreAuditPage', () => {
     expect(await screen.findByText(/Running: identity evidence/)).toBeInTheDocument()
     expect(api.calibreReconcile).toHaveBeenCalledTimes(1)
     expect(run).toBeDisabled()
+  })
+
+  it('keeps failed identifier attempts inspectable even when writes are disabled', async () => {
+    vi.mocked(api.calibreAuditIdentifierAttempts).mockResolvedValue({ items: [{
+      id: 21, actorUserId: 7, identifierType: 'openlibrary', oldValue: '', proposedValue: 'OL12W',
+      evidenceKeys: ['root'], action: 'add', outcome: 'failed', error: 'database locked', createdAt: '2026-01-01',
+    }] })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Identifier write attempts' }))
+    expect(await screen.findByText(/Request #21: add openlibrary=OL12W — failed/)).toBeInTheDocument()
+    expect(screen.getByText(/Failure: database locked/)).toBeInTheDocument()
+    expect(api.calibreAuditIdentifierAttempts).toHaveBeenCalledWith(3)
+    expect(screen.queryByRole('button', { name: 'Preview identifier additions' })).not.toBeInTheDocument()
+  })
+
+  it('fails closed when the independent write setting is absent, false or unreadable', async () => {
+    vi.mocked(api.calibreAudit).mockResolvedValue({ items: [missing], total: 1, limit: 50, offset: 0 })
+    for (const value of ['false', 'yes', '']) {
+      vi.mocked(api.getSetting).mockImplementation(async key => ({ key, value: key === 'calibre.identifier_write_enabled' ? value : '' }))
+      const view = renderPage()
+      await screen.findByText('No stored value')
+      await waitFor(() => expect(api.getSetting).toHaveBeenCalledWith('calibre.identifier_write_enabled'))
+      expect(screen.queryByRole('button', { name: 'Preview identifier additions' })).not.toBeInTheDocument()
+      view.unmount()
+    }
+    vi.mocked(api.getSetting).mockRejectedValue(new Error('setting unavailable'))
+    const view = renderPage()
+    await screen.findByText('No stored value')
+    expect(screen.queryByRole('button', { name: 'Preview identifier additions' })).not.toBeInTheDocument()
+    view.unmount()
+    expect(api.calibreAuditIdentifierProposals).not.toHaveBeenCalled()
+  })
+
+  it('previews provenance and safe source links, selects one addition, and requires explicit approval before apply', async () => {
+    vi.mocked(api.getSetting).mockImplementation(async key => ({ key, value: key === 'calibre.identifier_write_enabled' ? 'true' : '' }))
+    vi.mocked(api.calibreAudit).mockResolvedValue({ items: [missing], total: 1, limit: 50, offset: 0 })
+    vi.mocked(api.calibreAuditIdentifierProposals).mockResolvedValue({ items: [{ ...proposal,
+      evidence: [...proposal.evidence, { value: 'unlinked evidence', source: 'books.foreign_id', provider: 'unknown', foreignId: 'javascript:alert(1)' }],
+    }, {
+      ...proposal, identifierType: 'unknown', proposedValue: 'javascript:alert(1)',
+      evidence: [{ value: 'bad', source: 'books.foreign_id', provider: 'unknown', foreignId: 'javascript:alert(1)' }],
+    }] })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview identifier additions' }))
+    expect(await screen.findByText(/Canonical provider work record/)).toBeInTheDocument()
+    expect(api.calibreAuditIdentifierProposals).toHaveBeenCalledWith(3)
+    expect(screen.getAllByText('No stored value', { exact: false }).length).toBeGreaterThan(0)
+    expect(screen.getAllByRole('link', { name: 'OL12W ↗' }).some(link => link.getAttribute('href') === 'https://openlibrary.org/works/OL12W')).toBe(true)
+    expect(screen.queryByRole('link', { name: /javascript/ })).not.toBeInTheDocument()
+    const apply = screen.getByRole('button', { name: 'Add selected identifier to Calibre/CWA' })
+    expect(apply).toBeDisabled()
+    fireEvent.click(screen.getByRole('radio', { name: /openlibrary.*OL12W/i }))
+    expect(apply).toBeDisabled()
+    fireEvent.click(screen.getByRole('checkbox', { name: /I reviewed.*add only/i }))
+    fireEvent.click(apply)
+    await waitFor(() => expect(api.calibreAuditIdentifierAdd).toHaveBeenCalledWith(3, { comparisonFingerprint: 'fp1', proposedValue: 'OL12W' }))
+    await waitFor(() => expect(api.calibreAudit).toHaveBeenCalledTimes(2))
+    expect(await screen.findByRole('status', { name: /Identifier addition/i })).toHaveTextContent(/added/i)
+  })
+
+  it('links a server-proposed bare Hardcover slug but never guesses a numeric or unknown source', async () => {
+    vi.mocked(api.getSetting).mockImplementation(async key => ({ key, value: key === 'calibre.identifier_write_enabled' ? 'true' : '' }))
+    vi.mocked(api.calibreAudit).mockResolvedValue({ items: [{ ...missing, evidenceKey: 'hardcover' }], total: 1, limit: 50, offset: 0 })
+    vi.mocked(api.calibreAuditIdentifierProposals).mockResolvedValue({ items: [{ ...proposal,
+      identifierType: 'hardcover', proposedValue: 'known-slug',
+      evidence: [{ value: '123', source: 'books.foreign_id', provider: 'hardcover', foreignId: 'hc:123' }],
+    }] })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview identifier additions' }))
+    expect(await screen.findByRole('link', { name: 'known-slug ↗' })).toHaveAttribute('href', 'https://hardcover.app/books/known-slug')
+    expect(screen.getByRole('link', { name: 'known-slug ↗' })).toHaveAttribute('rel', 'noopener noreferrer')
+    expect(screen.queryByRole('link', { name: 'hc:123 ↗' })).not.toBeInTheDocument()
+  })
+
+  it('does not offer writes for edition, conflict, historical or ambiguous findings even when enabled', async () => {
+    vi.mocked(api.getSetting).mockImplementation(async key => ({ key, value: key === 'calibre.identifier_write_enabled' ? 'true' : '' }))
+    vi.mocked(api.calibreAudit).mockResolvedValue({ items: [
+      { ...missing, id: 4, evidenceKey: 'isbn' }, { ...missing, id: 5, findingType: 'identifier_conflict' },
+      { ...missing, id: 6, state: 'unmatched' }, { ...missing, id: 7, assessment: 'ambiguous' },
+    ], total: 4, limit: 50, offset: 0 })
+    renderPage()
+    await screen.findByText('4 findings match these filters')
+    expect(screen.queryByRole('button', { name: 'Preview identifier additions' })).not.toBeInTheDocument()
+  })
+
+  it('rejects stale proposals without posting and refreshes after a stale apply', async () => {
+    vi.mocked(api.getSetting).mockImplementation(async key => ({ key, value: key === 'calibre.identifier_write_enabled' ? 'true' : '' }))
+    vi.mocked(api.calibreAudit).mockResolvedValue({ items: [missing], total: 1, limit: 50, offset: 0 })
+    vi.mocked(api.calibreAuditIdentifierProposals).mockResolvedValueOnce({ items: [{ ...proposal, comparisonFingerprint: 'older' }] }).mockResolvedValueOnce({ items: [proposal] })
+    vi.mocked(api.calibreAuditIdentifierAdd).mockRejectedValueOnce(new ApiError(409, { error: 'stale' }, 'stale'))
+    renderPage()
+    const preview = await screen.findByRole('button', { name: 'Preview identifier additions' })
+    fireEvent.click(preview)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/finding changed/i)
+    expect(api.calibreAuditIdentifierAdd).not.toHaveBeenCalled()
+    fireEvent.click(preview)
+    fireEvent.click(await screen.findByRole('radio', { name: /openlibrary.*OL12W/i }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /I reviewed.*add only/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add selected identifier to Calibre/CWA' }))
+    await waitFor(() => expect(api.calibreAudit).toHaveBeenCalledTimes(3))
+    expect(screen.getByRole('alert')).toHaveTextContent(/finding changed/i)
+    expect(screen.queryByRole('button', { name: 'Add selected identifier to Calibre/CWA' })).not.toBeInTheDocument()
+  })
+
+  it('reports a successful write with a failed follow-up re-audit without hiding the failure', async () => {
+    vi.mocked(api.getSetting).mockImplementation(async key => ({ key, value: key === 'calibre.identifier_write_enabled' ? 'true' : '' }))
+    vi.mocked(api.calibreAudit).mockResolvedValueOnce({ items: [missing], total: 1, limit: 50, offset: 0 })
+      .mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
+    vi.mocked(api.calibreAuditIdentifierAdd).mockResolvedValue({ attemptId: 9, outcome: 'applied', reauditError: 'reader offline' })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview identifier additions' }))
+    fireEvent.click(await screen.findByRole('radio', { name: /openlibrary.*OL12W/i }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /I reviewed.*add only/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add selected identifier to Calibre/CWA' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/reader offline/i)
+    await waitFor(() => expect(api.calibreAudit).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText('No findings match these filters.')).toBeInTheDocument()
+    expect(screen.getByRole('status', { name: /Identifier addition/i })).toHaveTextContent(/applied/i)
+  })
+
+  it('shows an empty preview without approval and reports unconfirmed writes before retry', async () => {
+    vi.mocked(api.getSetting).mockImplementation(async key => ({ key, value: key === 'calibre.identifier_write_enabled' ? 'true' : '' }))
+    vi.mocked(api.calibreAudit).mockResolvedValue({ items: [missing], total: 1, limit: 50, offset: 0 })
+    vi.mocked(api.calibreAuditIdentifierProposals).mockResolvedValueOnce({ items: [] }).mockResolvedValueOnce({ items: [proposal] })
+    vi.mocked(api.calibreAuditIdentifierAdd).mockRejectedValueOnce(new ApiError(503, { error: 'write unconfirmed', attemptId: 21 }, 'write unconfirmed'))
+    vi.mocked(api.calibreAuditIdentifierAttempts).mockResolvedValueOnce({ items: [] }).mockResolvedValue({ items: [{
+      id: 21, actorUserId: 7, identifierType: 'openlibrary', oldValue: '', proposedValue: 'OL12W',
+      evidenceKeys: ['root'], action: 'add', outcome: 'failed', error: 'database locked', createdAt: '2026-01-01',
+    }] })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Identifier write attempts' }))
+    expect(await screen.findByText('No identifier write attempts recorded for this finding.')).toBeInTheDocument()
+    const preview = await screen.findByRole('button', { name: 'Preview identifier additions' })
+    fireEvent.click(preview)
+    expect(await screen.findByText(/No eligible missing work-level identifier additions/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Add selected identifier to Calibre/CWA' })).not.toBeInTheDocument()
+    fireEvent.click(preview)
+    fireEvent.click(await screen.findByRole('radio', { name: /openlibrary.*OL12W/i }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /I reviewed.*add only/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add selected identifier to Calibre/CWA' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/inspect Calibre\/CWA before retrying/i)
+    expect(screen.getByRole('alert')).toHaveTextContent(/Write attempt #21/)
+    expect(await screen.findByText(/Request #21: add openlibrary=OL12W — failed/)).toBeInTheDocument()
+    expect(api.calibreAuditIdentifierAttempts).toHaveBeenCalledTimes(2)
+    expect(screen.queryByRole('button', { name: 'Add selected identifier to Calibre/CWA' })).not.toBeInTheDocument()
   })
 
   it('shows owned and provider evidence separately with source, reason, and ambiguity', async () => {

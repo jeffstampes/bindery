@@ -108,6 +108,9 @@ type calibreAuditRouteHandler interface {
 	Reopen(http.ResponseWriter, *http.Request)
 	Identity(http.ResponseWriter, *http.Request)
 	ScanArtifacts(http.ResponseWriter, *http.Request)
+	IdentifierProposals(http.ResponseWriter, *http.Request)
+	IdentifierAdd(http.ResponseWriter, *http.Request)
+	IdentifierAttempts(http.ResponseWriter, *http.Request)
 }
 
 // Audit review is admin-only; the handler additionally refuses disabled mode.
@@ -121,6 +124,9 @@ func registerCalibreAuditRoutes(r chi.Router, h calibreAuditRouteHandler) {
 		r.Get("/calibre/reconciliation/status", h.ReconcileStatus)
 		r.Post("/calibre/audit/{id}/ignore", h.Ignore)
 		r.Post("/calibre/audit/{id}/reopen", h.Reopen)
+		r.Get("/calibre/audit/{id}/identifier-proposals", h.IdentifierProposals)
+		r.Post("/calibre/audit/{id}/identifier-add", h.IdentifierAdd)
+		r.Get("/calibre/audit/{id}/identifier-attempts", h.IdentifierAttempts)
 		r.Get("/calibre/identity/{bookID}", h.Identity)
 		r.Post("/calibre/identity/{bookID}/scan", h.ScanArtifacts)
 	})
