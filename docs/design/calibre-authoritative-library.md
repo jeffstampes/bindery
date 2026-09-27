@@ -215,6 +215,62 @@ On Book Detail, an ebook already satisfied by Calibre/CWA no longer offers an
 ebook indexer search. A dual-format work can still search for its missing
 audiobook alone, without searching ebook categories again.
 
+### Owned artifact identifier observations (#25)
+
+Calibre's Extract ISBN plugin reads ebook *content* and may update Calibre's
+`metadata.db` identifier, but that database records only the current ISBN, not
+whether it came from an owned file. Agreement with that ISBN is therefore **not**
+artifact provenance. Calibre's documented `ebook-meta`/`calibredb` interfaces do
+not expose the plugin's file-by-file candidates, and the distroless Bindery image
+does not include Calibre's GUI/plugin runtime. Instead, an admin explicitly
+requests `POST /api/v1/calibre/identity/{bookID}/scan` after a confident ownership
+match and rooted provider discovery. It reads the actual linked Calibre files
+without modifying them or `metadata.db`. `GET /api/v1/calibre/identity/{bookID}`
+then includes `artifacts` alongside the existing provider evidence and CWA
+claims. The audit finding comparison and write paths do **not** consume these
+observations; later edition-resolution/reconciliation issues may do so.
+
+The initial reader supports **EPUB only**: it reads checksum-valid ISBN-10/13
+from package identifier elements and ISBN-labelled XHTML content. It does not
+run the Calibre Extract ISBN plugin or retroactively attest to its past actions.
+Other formats (PDF, MOBI, KFX, etc.) are explicitly `unsupported`; oversized,
+malformed or truncated EPUBs are `partial`/`failed`, not negative evidence.
+The scan is on demand per work, never a full-library background rescan. It
+allows at most eight formats per request; for EPUBs it limits the file to
+64 MiB, 256 archive members, 2 MiB per member, 16 MiB total inspected text
+and 32 candidate observations. Unsupported formats are classified before the
+EPUB size check and are not hashed or parsed.
+No new dependency or network lookup is required. Only paths from the live
+Calibre `data` table are opened, confined to the library root (Go `os.Root`).
+
+Migration 093 stores one file-scan record in Bindery per work/Calibre ID,
+format and filename, independently of the provider snapshot lifecycle. Each
+record retains its library-relative path, format, filename, size, modification
+time, scan time, extraction method, completion status and any observed ISBNs
+(raw and normalized), their OPF/XHTML source and archive member. SHA-256 and a
+digest-derived correlation group are populated only when an EPUB reaches the
+hashing step; unsupported formats and EPUBs rejected by the size limit have
+neither. Where present, identical digests share a group across formats. The
+scanner does not select an ISBN: `selected=false` for every candidate, rather
+than claiming Calibre selected the first/last or that a textual mention proves
+an edition.
+If the file or its Calibre format link changes, the API marks the scan stale and
+suppresses its positive assessment; rescanning is explicit. A same-size,
+same-mtime replacement cannot be detected cheaply on every GET; an explicit
+rescan can detect it (and compare a newly generated digest, where available).
+
+On read, candidates are revalidated against **current** Bindery-rooted provider
+work and edition records, never against CWA's ISBN. A matching rooted or
+corroborated provider ISBN is `matches_work`; a known rejected provider record
+with the same ISBN is `conflict`; an unknown ISBN remains `unverified` (absence
+from provider results is not proof of another work). Only a unique edition
+from the canonical provider's exact-editions lookup may be `candidate` for
+edition confidence; different or conflicting identifiers in one file keep it
+`unresolved`. Neither label selects the physical edition or alters work
+confidence, `books.foreign_id`, `book_identifiers`, cross-references, CWA
+metadata or ebook bytes. An old Calibre link's scans are not exposed as current
+when ownership changes.
+
 ### Backend metadata audit (#6)
 
 `AuthoritativeService.Reconcile` reuses its single read-only Calibre snapshot

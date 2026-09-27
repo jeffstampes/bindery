@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -90,6 +91,41 @@ func (h *CalibreAuditHandler) Identity(w http.ResponseWriter, r *http.Request) {
 	}
 	if snapshot == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "identity evidence unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+// ScanArtifacts explicitly reads the linked owned files; it is never triggered
+// by a GET, ordinary audit, or full-library reconciliation. The router requires
+// admin access, and the service rechecks the active ownership link before IO.
+func (h *CalibreAuditHandler) ScanArtifacts(w http.ResponseWriter, r *http.Request) {
+	if !h.available(w, r) {
+		return
+	}
+	bookID, err := strconv.ParseInt(chi.URLParam(r, "bookID"), 10, 64)
+	if err != nil || bookID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid book id"})
+		return
+	}
+	scanner, ok := h.service.(interface {
+		ScanArtifacts(context.Context, int64) (*models.CalibreIdentitySnapshot, error)
+	})
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "artifact scan unavailable"})
+		return
+	}
+	snapshot, err := scanner.ScanArtifacts(r.Context(), bookID)
+	if errors.Is(err, calibre.ErrArtifactNotReady) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if snapshot == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "matched identity evidence unavailable"})
 		return
 	}
 	writeJSON(w, http.StatusOK, snapshot)

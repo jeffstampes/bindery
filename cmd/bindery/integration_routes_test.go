@@ -54,6 +54,9 @@ func (h *stubIntegrationHandler) Ignore(w http.ResponseWriter, _ *http.Request) 
 func (h *stubIntegrationHandler) Identity(w http.ResponseWriter, _ *http.Request) {
 	h.record("identity", w)
 }
+func (h *stubIntegrationHandler) ScanArtifacts(w http.ResponseWriter, _ *http.Request) {
+	h.record("scan-artifacts", w)
+}
 
 // newIntegrationRouter wires the three integration route helpers onto a fresh
 // router with one shared stub, mirroring how main.go mounts them.
@@ -91,6 +94,7 @@ func TestIntegrationRoutesRequireAdmin(t *testing.T) {
 		{"calibre audit recheck status", http.MethodGet, "/calibre/audit/recheck/status"},
 		{"calibre audit ignore", http.MethodPost, "/calibre/audit/1/ignore"},
 		{"calibre identity evidence", http.MethodGet, "/calibre/identity/1"},
+		{"calibre artifact scan", http.MethodPost, "/calibre/identity/1/scan"},
 	}
 	for _, tt := range gated {
 		t.Run(tt.name, func(t *testing.T) {
