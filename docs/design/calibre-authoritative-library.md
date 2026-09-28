@@ -353,6 +353,22 @@ provider candidates are explicitly labelled separately; thumbnails are not
 edition attestation. Artwork does **not** enter work/edition resolution,
 ownership confidence, audit comparisons, or identifier-add/write eligibility.
 
+### Operator-facing audit comparison (#42–#47)
+
+The review page groups repeated *literal, typed* identifier claims in each
+comparison while retaining all underlying evidence and distinguishing stored
+metadata records from metadata-provider observations in the displayed
+provenance. ISBN-10 and ISBN-13 remain separate visible forms. Every identifier
+finding names its type next to the book, and the identifier-comparison state is
+labelled separately from the edition match. Resolved identifier comparisons
+show agreement even when their previous finding type was missing or conflicting;
+no client-side normalization replaces the backend's conservative comparison.
+Edition explanations follow the resolver's selected reason, including the
+actual Calibre identifier type when another type supports an edition while the
+audited type is absent. Correlated Calibre fields are still one claim, not
+independent book-file evidence. These presentation changes do not change
+reconciliation, confidence, authority, artwork safety or identifier-add gating.
+
 ### Backend metadata audit (#6)
 
 `AuthoritativeService.Reconcile` reuses its single read-only Calibre snapshot
