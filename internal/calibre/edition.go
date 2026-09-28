@@ -177,12 +177,12 @@ func ResolveOwnedEdition(snapshot models.CalibreIdentitySnapshot, cb *CalibreBoo
 			retainedMatches = append(retainedMatches, i)
 		}
 		reasons := []string{}
+		claimsForDisplay := []models.CalibreEditionClaim{}
 		if len(candidates[i].cwa) > 0 {
-			claims := make([]string, 0, len(candidates[i].cwa))
 			for _, claim := range candidates[i].cwa {
-				claims = append(claims, claim.typ+":"+claim.value)
+				claimsForDisplay = append(claimsForDisplay, models.CalibreEditionClaim{Type: claim.typ, Value: claim.value})
 			}
-			reasons = append(reasons, "CWA claims "+strings.Join(claims, ", ")+" (one correlated source)")
+			reasons = append(reasons, "CWA claims (one correlated source)")
 		}
 		if len(candidates[i].artifact) > 0 {
 			reasons = append(reasons, "pre-write-back file ISBN matches this edition")
@@ -191,7 +191,7 @@ func ResolveOwnedEdition(snapshot models.CalibreIdentitySnapshot, cb *CalibreBoo
 			reasons = append(reasons, "historical pre-write-back ISBN remains in a current scan of the same file (limited support)")
 		}
 		result.Candidates = append(result.Candidates, models.CalibreEditionCandidate{
-			EditionID: candidates[i].e.EditionID, Provider: candidates[i].e.Provider, Reasons: reasons})
+			EditionID: candidates[i].e.EditionID, Provider: candidates[i].e.Provider, Reasons: reasons, Claims: claimsForDisplay})
 	}
 	// Intersect individual normalized type/value claims, not identifier types.
 	// A native edition ID and ISBN can narrow a shared ISBN but remain one

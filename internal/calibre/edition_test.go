@@ -92,8 +92,12 @@ func TestResolveOwnedEditionMultipleCandidatesAndCorrelatedClaims(t *testing.T) 
 	cb.Identifiers["openlibrary_edition"] = "OL40M"
 	cb.Identifiers["isbn"] = "9780306406157"
 	if got := ResolveOwnedEdition(snapshot, cb); got.Confidence != "high" || got.EditionID != "OL40M" ||
-		!strings.Contains(got.Reason, "one claim") || len(got.Candidates[0].Reasons) != 1 {
-		t.Fatalf("correlated CWA fields counted as independent votes: %+v", got)
+		!strings.Contains(got.Reason, "one claim") || len(got.Candidates[0].Reasons) != 1 ||
+		got.Candidates[0].Reasons[0] != "CWA claims (one correlated source)" ||
+		len(got.Candidates[0].Claims) != 2 ||
+		got.Candidates[0].Claims[0] != (models.CalibreEditionClaim{Type: "openlibrary_edition", Value: "OL40M"}) ||
+		got.Candidates[0].Claims[1] != (models.CalibreEditionClaim{Type: "isbn", Value: "9780306406157"}) {
+		t.Fatalf("correlated CWA claims must remain structured without changing confidence: %+v", got)
 	}
 	cb.Identifiers["isbn"] = "9781861972712"
 	if got := ResolveOwnedEdition(snapshot, cb); got.Confidence != "ambiguous" || got.EditionID != "" {
@@ -204,8 +208,9 @@ func TestResolveOwnedEditionDistinctCWAISBNsNeverBecomeSharedClaim(t *testing.T)
 			got := ResolveOwnedEdition(snapshot, cb)
 			if got.Confidence != "ambiguous" || got.EditionID != "" || len(got.Candidates) != 2 ||
 				len(got.Candidates[0].Reasons) == 0 || len(got.Candidates[1].Reasons) == 0 ||
-				!strings.Contains(got.Candidates[0].Reasons[0], "isbn:9780306406157") ||
-				!strings.Contains(got.Candidates[1].Reasons[0], "isbn:9781861972712") {
+				len(got.Candidates[0].Claims) != 1 || len(got.Candidates[1].Claims) != 1 ||
+				got.Candidates[0].Claims[0] != (models.CalibreEditionClaim{Type: "isbn", Value: "9780306406157"}) ||
+				got.Candidates[1].Claims[0] != (models.CalibreEditionClaim{Type: "isbn", Value: "9781861972712"}) {
 				t.Fatalf("distinct ISBN claims were treated as one shared claim: %+v", got)
 			}
 		})
@@ -236,7 +241,8 @@ func TestResolveOwnedEditionEquivalentISBNSpellingsDeduplicate(t *testing.T) {
 	got := ResolveOwnedEdition(snapshot, cb)
 	if got.Confidence != "high" || got.EditionID != "OL40M" ||
 		len(got.Candidates) != 2 || len(got.Candidates[0].Reasons) != 1 ||
-		strings.Count(got.Candidates[0].Reasons[0], "isbn:9780306406157") != 1 {
+		len(got.Candidates[0].Claims) != 1 ||
+		got.Candidates[0].Claims[0] != (models.CalibreEditionClaim{Type: "isbn", Value: "9780306406157"}) {
 		t.Fatalf("equivalent ISBN-10/13 spellings became competing claims: %+v", got)
 	}
 }
