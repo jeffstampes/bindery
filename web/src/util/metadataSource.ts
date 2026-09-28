@@ -9,20 +9,54 @@
 
 export type MetadataSourceLink = { url: string; label: string }
 
-// Audit evidence needs provider-aware parsing: plain identifiers such as ISBNs
-// must never be guessed to be OpenLibrary URLs. Accept only known native IDs.
-export function auditProviderRecordLink(e: { source: string; value: string; provider?: string; foreignId?: string }): MetadataSourceLink | null {
-  const calibreID = e.source.startsWith('calibre.identifiers.')
-  const provider = calibreID ? e.source.slice('calibre.identifiers.'.length).toLowerCase() : e.provider?.toLowerCase()
-  const rawID = (calibreID ? e.value : e.foreignId)?.trim() ?? ''
-  const id = provider === 'google' || provider === 'googlebooks'
-    ? (rawID.startsWith('gb:') ? rawID : `gb:${rawID}`)
-    : provider === 'dnb' ? (rawID.startsWith('dnb:') ? rawID : `dnb:${rawID}`)
-      : provider === 'hardcover' ? (rawID.startsWith('hc:') ? rawID : `hc:${rawID}`) : rawID
-  if (['openlibrary', 'openlibrary_work', 'openlibrary_edition', 'ol'].includes(provider ?? '') && /^OL\d+[WMA]$/.test(id)) return metadataSourceLink(id, id.endsWith('A') ? 'author' : 'book')
-  if ((provider === 'googlebooks' || provider === 'google') && /^gb:[A-Za-z0-9_-]+$/.test(id)) return metadataSourceLink(id, 'book')
-  if (provider === 'hardcover' && /^hc:[a-z0-9][a-z0-9-]*$/i.test(id)) return metadataSourceLink(id, 'book')
-  if (provider === 'dnb' && /^dnb:\d+$/.test(id)) return metadataSourceLink(id, 'book')
+// Navigation only: an explicit identifier type (or the provider of a foreign
+// record) selects a known direct-record route. Keep validation stricter than
+// metadataSourceLink, which also serves older, less structured catalogue IDs.
+export function auditIdentifierRecordLink({ type, value, provider }: {
+  type: string; value: string; provider?: string
+}): MetadataSourceLink | null {
+  const kind = (type === 'foreign_id' ? provider : type)?.toLowerCase()
+  const raw = value.trim()
+  if (!raw) return null
+
+  if (['openlibrary', 'ol', 'openlibrary_work', 'openlibrary_edition', 'openlibrary_author'].includes(kind ?? '')) {
+    const id = raw.replace(/^openlibrary:/i, '')
+    const suffix = kind === 'openlibrary_edition' ? 'M' : kind === 'openlibrary_author' ? 'A'
+      : kind === 'openlibrary_work' ? 'W' : '[WMA]'
+    if (!new RegExp(`^OL\\d+${suffix}$`).test(id)) return null
+    return metadataSourceLink(id, id.endsWith('A') ? 'author' : 'book')
+  }
+  if (kind === 'google' || kind === 'googlebooks') {
+    const id = raw.replace(/^gb:/i, '')
+    return /^[A-Za-z0-9_-]+$/.test(id) ? metadataSourceLink(`gb:${id}`, 'book') : null
+  }
+  if (kind === 'hardcover') {
+    const id = raw.replace(/^hc:/i, '')
+    // A bare OpenLibrary key is not a known Hardcover slug; numeric values
+    // may be database IDs rather than slugs and are not direct-record links.
+    if (/^OL\d+[WMA]$/.test(raw) || /^\d+$/.test(id)) return null
+    return /^[a-z0-9][a-z0-9-]*$/i.test(id) ? metadataSourceLink(`hc:${id}`, 'book') : null
+  }
+  if (kind === 'dnb') {
+    const id = raw.replace(/^dnb:/i, '')
+    return /^\d+$/.test(id) ? metadataSourceLink(`dnb:${id}`, 'book') : null
+  }
+  if (kind === 'isbn') {
+    const id = raw.toUpperCase().replace(/[\s-]/g, '')
+    if (/^\d{9}[\dX]$/.test(id)) {
+      const sum = [...id].reduce((n, digit, i) => n + (digit === 'X' ? 10 : Number(digit)) * (10 - i), 0)
+      if (sum % 11 === 0) return { url: `https://openlibrary.org/isbn/${id}`, label: 'OpenLibrary' }
+    }
+    if (/^97[89]\d{10}$/.test(id)) {
+      const sum = [...id].reduce((n, digit, i) => n + Number(digit) * (i % 2 ? 3 : 1), 0)
+      if (sum % 10 === 0) return { url: `https://openlibrary.org/isbn/${id}`, label: 'OpenLibrary' }
+    }
+    return null
+  }
+  if (kind === 'asin') {
+    const id = raw.toUpperCase()
+    return /^[A-Z0-9]{10}$/.test(id) ? { url: `https://www.amazon.com/dp/${id}`, label: 'Amazon' } : null
+  }
   return null
 }
 

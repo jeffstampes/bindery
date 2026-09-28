@@ -158,7 +158,7 @@ export interface CalibreIdentitySnapshot {
     editionId?: string
     provider?: string
     reason: string
-    candidates: Array<{ editionId: string; provider: string; reasons: string[] }>
+    candidates: Array<{ editionId: string; provider: string; reasons: string[]; claims?: Array<{ type: string; value: string }> }>
   }
 }
 

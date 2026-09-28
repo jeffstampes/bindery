@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  auditIdentifierRecordLink,
   hardcoverSeriesUrl,
   metadataSourceLink,
   providerDisplayName,
@@ -67,6 +68,44 @@ describe('metadataSourceLink', () => {
     expect(metadataSourceLink(undefined, 'book')).toBeNull()
     expect(metadataSourceLink('gb:', 'book')).toBeNull()
     expect(metadataSourceLink('OL123', 'author')).toBeNull() // no trailing A
+  })
+})
+
+describe('auditIdentifierRecordLink', () => {
+  it.each([
+    ['openlibrary', 'OL27448W', 'https://openlibrary.org/works/OL27448W'],
+    ['openlibrary_edition', 'OL7353617M', 'https://openlibrary.org/books/OL7353617M'],
+    ['openlibrary_author', 'OL23919A', 'https://openlibrary.org/authors/OL23919A'],
+    ['hardcover', 'hc:project-hail-mary', 'https://hardcover.app/books/project-hail-mary'],
+    ['googlebooks', 'gb:zyTCAlFPjgYC', 'https://books.google.com/books?id=zyTCAlFPjgYC'],
+    ['dnb', 'dnb:123456789', 'https://d-nb.info/123456789'],
+    ['isbn', '978-0-306-40615-7', 'https://openlibrary.org/isbn/9780306406157'],
+    ['isbn', '0-306-40615-2', 'https://openlibrary.org/isbn/0306406152'],
+    ['asin', 'b000123456', 'https://www.amazon.com/dp/B000123456'],
+  ])('resolves %s %s to its direct record', (type, value, url) => {
+    expect(auditIdentifierRecordLink({ type, value })?.url).toBe(url)
+  })
+
+  it('uses the same normalized destination for bare and prefixed provider IDs', () => {
+    expect(auditIdentifierRecordLink({ type: 'google', value: 'vol_1' })).toEqual(
+      auditIdentifierRecordLink({ type: 'googlebooks', value: 'gb:vol_1' }))
+    expect(auditIdentifierRecordLink({ type: 'hardcover', value: 'known-slug' })).toEqual(
+      auditIdentifierRecordLink({ type: 'hardcover', value: 'hc:known-slug' }))
+  })
+
+  it.each([
+    ['other', 'OL27448W'], ['goodreads', '12345'], ['openlibrary_work', 'OL7353617M'],
+    ['openlibrary_edition', 'OL27448W'], ['openlibrary_author', 'OL27448W'],
+    ['openlibrary', 'OL42W<script>'], ['google', 'javascript:alert(1)'],
+    ['hardcover', 'hc:123'], ['hardcover', '123'], ['hardcover', 'hc:bad/value'], ['dnb', 'dnb:gnd:123'],
+    ['isbn', '9780306406158'], ['isbn', 'not-an-isbn'], ['asin', 'B00/123456'],
+  ])('leaves unsupported, ambiguous or malformed %s %s unlinked', (type, value) => {
+    expect(auditIdentifierRecordLink({ type, value })).toBeNull()
+  })
+
+  it('does not let a mismatched provider turn an opaque value into a link', () => {
+    expect(auditIdentifierRecordLink({ type: 'foreign_id', provider: 'hardcover', value: 'OL27448W' })).toBeNull()
+    expect(auditIdentifierRecordLink({ type: 'foreign_id', value: 'OL27448W' })).toBeNull()
   })
 })
 

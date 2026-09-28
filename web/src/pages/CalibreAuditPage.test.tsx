@@ -128,7 +128,7 @@ describe('CalibreAuditPage', () => {
     }] })
     renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'Identifier write attempts' }))
-    expect(await screen.findByText(/Request #21: add openlibrary=OL12W — failed/)).toBeInTheDocument()
+    expect((await screen.findByRole('link', { name: 'OL12W ↗' })).closest('p')).toHaveTextContent('Request #21: add openlibrary=OL12W ↗ — failed')
     expect(screen.getByText(/Failure: database locked/)).toBeInTheDocument()
     expect(api.calibreAuditIdentifierAttempts).toHaveBeenCalledWith(3)
     expect(screen.queryByRole('button', { name: 'Preview identifier additions' })).not.toBeInTheDocument()
@@ -170,7 +170,9 @@ describe('CalibreAuditPage', () => {
     expect(screen.queryByRole('link', { name: /javascript/ })).not.toBeInTheDocument()
     const apply = screen.getByRole('button', { name: 'Add selected identifier to Calibre/CWA' })
     expect(apply).toBeDisabled()
-    fireEvent.click(screen.getByRole('radio', { name: /openlibrary.*OL12W/i }))
+    const radio = screen.getByRole('radio', { name: /openlibrary.*OL12W/i })
+    fireEvent.click(radio.closest('label')!)
+    expect(radio).toBeChecked()
     expect(apply).toBeDisabled()
     fireEvent.click(screen.getByRole('checkbox', { name: /I reviewed.*add only/i }))
     fireEvent.click(apply)
@@ -188,8 +190,10 @@ describe('CalibreAuditPage', () => {
     }] })
     renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'Preview identifier additions' }))
-    expect(await screen.findByRole('link', { name: 'known-slug ↗' })).toHaveAttribute('href', 'https://hardcover.app/books/known-slug')
-    expect(screen.getByRole('link', { name: 'known-slug ↗' })).toHaveAttribute('rel', 'noopener noreferrer')
+    expect((await screen.findAllByRole('link', { name: 'known-slug ↗' })).every(link => link.getAttribute('href') === 'https://hardcover.app/books/known-slug')).toBe(true)
+    expect(screen.getAllByRole('link', { name: 'known-slug ↗' })[0]).toHaveAttribute('rel', 'noopener noreferrer')
+    expect(screen.getByText('123').closest('li')).toHaveTextContent('hc:123')
+    expect(screen.queryByRole('link', { name: '123 ↗' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'hc:123 ↗' })).not.toBeInTheDocument()
   })
 
@@ -261,7 +265,7 @@ describe('CalibreAuditPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add selected identifier to Calibre/CWA' }))
     expect(await screen.findByRole('alert')).toHaveTextContent(/inspect Calibre\/CWA before retrying/i)
     expect(screen.getByRole('alert')).toHaveTextContent(/Write attempt #21/)
-    expect(await screen.findByText(/Request #21: add openlibrary=OL12W — failed/)).toBeInTheDocument()
+    expect((await screen.findByRole('link', { name: 'OL12W ↗' })).closest('p')).toHaveTextContent('Request #21: add openlibrary=OL12W ↗ — failed')
     expect(api.calibreAuditIdentifierAttempts).toHaveBeenCalledTimes(2)
     expect(screen.queryByRole('button', { name: 'Add selected identifier to Calibre/CWA' })).not.toBeInTheDocument()
   })
@@ -372,9 +376,30 @@ describe('CalibreAuditPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Show work and edition evidence' }))
     expect(await screen.findByText(/Provider work evidence: canonical. Edition evidence: ambiguous/)).toBeInTheDocument()
     expect(screen.getByText('Several editions share the claimed ISBN.')).toBeInTheDocument()
-    expect(screen.getByText(/openlibrary: OL4M/)).toBeInTheDocument()
-    expect(screen.getByText(/openlibrary: OL5M/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'OL4M ↗' }).closest('li')).toHaveTextContent('openlibrary: OL4M ↗')
+    expect(screen.getByRole('link', { name: 'OL5M ↗' }).closest('li')).toHaveTextContent('openlibrary: OL5M ↗')
     expect(api.calibreAuditIdentity).toHaveBeenCalledWith(5)
+  })
+
+  it('links typed CWA claims separately from edition-candidate explanations without changing confidence or actions', async () => {
+    vi.mocked(api.getSetting).mockImplementation(async key => ({ key, value: key === 'calibre.identifier_write_enabled' ? 'true' : '' }))
+    vi.mocked(api.calibreAuditIdentity).mockResolvedValue({ bookId: 5, calibreId: 17, rootKey: 'openlibrary:OL1W', evidence: [
+      { status: 'root', workConfidence: 'canonical', editionConfidence: 'unresolved' },
+    ], edition: { confidence: 'ambiguous', reason: 'Several editions share the claimed ISBN.', candidates: [
+      { provider: 'openlibrary', editionId: 'OL4M', reasons: ['CWA claims (one correlated source)', 'pre-write-back file ISBN matches this edition'], claims: [
+        { type: 'openlibrary_edition', value: 'OL4M' }, { type: 'isbn', value: '9780306406157' },
+      ] },
+    ] } })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Show work and edition evidence' }))
+    const isbn = await screen.findByRole('link', { name: '9780306406157 ↗' })
+    expect(isbn).toHaveAttribute('href', 'https://openlibrary.org/isbn/9780306406157')
+    expect(isbn).toHaveAttribute('target', '_blank')
+    expect(isbn).toHaveAttribute('rel', 'noopener noreferrer')
+    expect(screen.getAllByRole('link', { name: 'OL4M ↗' })).toHaveLength(2)
+    expect(isbn.closest('li')).toHaveTextContent('CWA claims (one correlated source); pre-write-back file ISBN matches this edition · openlibrary_edition:OL4M ↗, isbn:9780306406157 ↗')
+    expect(screen.getByText(/Edition evidence: ambiguous/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Preview identifier additions' })).not.toBeInTheDocument()
   })
 
   it('shows the selected owned edition without calling a candidate confirmed by evidence status alone', async () => {
@@ -385,7 +410,7 @@ describe('CalibreAuditPage', () => {
       reason: 'A unique owned-book ISBN matches the edition.', candidates: [{ provider: 'openlibrary', editionId: 'OL4M', reasons: [] }] } })
     renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'Show work and edition evidence' }))
-    expect(await screen.findByText(/Edition evidence: high \(OL4M\)/)).toBeInTheDocument()
+    expect((await screen.findAllByRole('link', { name: 'OL4M ↗' }))[0].closest('p')).toHaveTextContent('Edition evidence: high (OL4M ↗)')
     expect(screen.getByText('A unique owned-book ISBN matches the edition.')).toBeInTheDocument()
     expect(screen.queryByText('A candidate edition is not a confirmed match to the owned file.')).not.toBeInTheDocument()
   })
@@ -407,6 +432,30 @@ describe('CalibreAuditPage', () => {
     expect(screen.queryByRole('link', { name: /javascript/ })).not.toBeInTheDocument()
   })
 
+  it('links typed CWA and Bindery edition evidence while leaving unsupported and malformed identifiers readable', async () => {
+    vi.mocked(api.calibreAudit).mockResolvedValue({ items: [{ ...finding, field: 'identifiers', evidenceKey: 'isbn',
+      findingType: 'identifier_conflict', calibreEvidence: [
+        { value: '978-0-306-40615-7', source: 'calibre.identifiers.isbn' },
+        { value: 'B000FC1BN8', source: 'calibre.identifiers.asin' },
+        { value: '12345', source: 'calibre.identifiers.goodreads' },
+        { value: '9780306406158', source: 'calibre.identifiers.isbn' },
+      ], binderyEvidence: [
+        { value: '9780306406157', source: 'editions.isbn_13', provider: 'openlibrary', foreignId: 'OL4M' },
+      ],
+    }], total: 1, limit: 50, offset: 0 })
+    renderPage()
+    const cwaISBN = await screen.findByRole('link', { name: '978-0-306-40615-7 ↗' })
+    const providerISBN = screen.getByRole('link', { name: '9780306406157 ↗' })
+    expect(cwaISBN).toHaveAttribute('href', 'https://openlibrary.org/isbn/9780306406157')
+    expect(providerISBN).toHaveAttribute('href', cwaISBN.getAttribute('href'))
+    expect(screen.getByRole('link', { name: 'B000FC1BN8 ↗' })).toHaveAttribute('href', 'https://www.amazon.com/dp/B000FC1BN8')
+    expect(screen.getByText('12345')).toBeInTheDocument()
+    expect(screen.getByText('9780306406158')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /12345|9780306406158/ })).not.toBeInTheDocument()
+    expect(screen.getByText('Current comparison · ambiguous')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Preview identifier additions' })).not.toBeInTheDocument()
+  })
+
   it('only links supported provider records and separates current review from historical filters', async () => {
     vi.mocked(api.calibreAudit).mockResolvedValue({ items: [{ ...finding, field: 'identifiers', evidenceKey: 'hardcover',
       findingType: 'identifier_missing', assessment: 'needs_review', binderyEvidence: [
@@ -418,8 +467,8 @@ describe('CalibreAuditPage', () => {
     renderPage()
     expect(await screen.findByText('Work/provider identifier')).toBeInTheDocument()
     expect(screen.getByText('Current comparison · review')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'hc:known-slug ↗' })).toHaveAttribute('href', 'https://hardcover.app/books/known-slug')
-    expect(screen.getByRole('link', { name: 'gb:vol_1 ↗' })).toHaveAttribute('href', 'https://books.google.com/books?id=vol_1')
+    expect(screen.getAllByRole('link', { name: 'hc:known-slug ↗' }).every(link => link.getAttribute('href') === 'https://hardcover.app/books/known-slug')).toBe(true)
+    expect(screen.getAllByRole('link', { name: 'gb:vol_1 ↗' }).every(link => link.getAttribute('href') === 'https://books.google.com/books?id=vol_1')).toBe(true)
     expect(screen.queryByRole('link', { name: 'hc:123 ↗' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'OL42W<script> ↗' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Ambiguous editions' }))
