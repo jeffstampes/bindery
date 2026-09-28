@@ -286,7 +286,7 @@ describe('CalibreAuditPage', () => {
     expect(screen.getByRole('link', { name: 'OL1W ↗' })).toHaveAttribute('href', 'https://openlibrary.org/works/OL1W')
     expect(screen.getByText(/Calibre's title differs/)).toBeInTheDocument()
     expect(screen.getByText(/Bindery is confident this is the same book/)).toBeInTheDocument()
-    expect(screen.getByText(/Edition match needs review/)).toBeInTheDocument()
+    expect(await screen.findByText(/Edition match needs review/)).toBeInTheDocument()
     expect(screen.getByText(/The owned title differs from the stored external work/)).not.toBeVisible()
     expect(screen.getByText('Current comparison · ambiguous')).toBeInTheDocument()
     expect(screen.getAllByText('Ambiguous evidence')).toHaveLength(2)
@@ -712,6 +712,85 @@ describe('CalibreAuditPage', () => {
     expect(screen.queryByText(/Calibre currently stores an identifier that points to this edition/)).not.toBeInTheDocument()
   })
 
+  it('shows two distinct rooted edition covers beside their own IDs and the separate current CWA cover', async () => {
+    vi.mocked(api.getSetting).mockImplementation(async key => ({ key, value: key === 'cwa.web_url' ? 'https://cwa.example/root' : 'true' }))
+    vi.mocked(api.calibreAudit).mockResolvedValue({ items: [{ ...missing, assessment: 'ambiguous', evidenceKey: 'isbn',
+      calibreEvidence: [{ value: '9780306406157', source: 'calibre.identifiers.isbn' }] }], total: 1, limit: 50, offset: 0 })
+    vi.mocked(api.calibreAuditIdentity).mockResolvedValue({ bookId: 5, calibreId: 17, rootKey: 'openlibrary:OL1W', hasOwnedCover: true,
+      evidence: ['OL4M', 'OL5M'].map((id, index) => ({ status: 'root', method: 'exact_editions', canonicalIdentity: 'openlibrary:OL1W',
+        provider: 'openlibrary', editionId: id, workConfidence: 'exact', editionConfidence: 'unresolved',
+        providerMetadata: { ebook: true, title: `Edition ${index + 1}`, publisher: `Publisher ${index + 1}`,
+          publicationDate: `202${index}-01-01`, imageUrl: `https://covers.openlibrary.org/b/id/${index + 1}-L.jpg` } })),
+      edition: { confidence: 'ambiguous', reason: 'Several editions', candidates: [
+        { provider: 'openlibrary', editionId: 'OL4M', reasons: [] }, { provider: 'openlibrary', editionId: 'OL5M', reasons: [] },
+      ] },
+    })
+    renderPage()
+    const current = await screen.findByRole('img', { name: 'Cover stored with the current Calibre/CWA book' })
+    expect(current).toHaveAttribute('src', '/api/v1/calibre/identity/5/cover')
+    expect(current).toHaveAttribute('loading', 'lazy')
+    const first = screen.getByRole('img', { name: 'OpenLibrary edition OL4M cover' })
+    const second = screen.getByRole('img', { name: 'OpenLibrary edition OL5M cover' })
+    expect(first.getAttribute('src')).toContain(encodeURIComponent('https://covers.openlibrary.org/b/id/1-L.jpg'))
+    expect(second.getAttribute('src')).toContain(encodeURIComponent('https://covers.openlibrary.org/b/id/2-L.jpg'))
+    for (const [image, id] of [[first, 'OL4M'], [second, 'OL5M']] as const) {
+      const card = image.closest('li')!
+      expect(within(card).getByRole('link', { name: `${id} ↗` })).toHaveAttribute('href', `https://openlibrary.org/books/${id}`)
+      expect(within(card).getByRole('link', { name: `${id} ↗` })).toHaveAttribute('target', '_blank')
+      expect(within(card).getByRole('link', { name: `${id} ↗` })).toHaveAttribute('rel', 'noopener noreferrer')
+    }
+    expect(screen.getByText('Publisher 1')).toBeInTheDocument()
+    expect(screen.getByText('Current Calibre/CWA book (owned copy) · Calibre book #17')).toBeInTheDocument()
+    expect(screen.getByText(/Covers are for visual comparison only/)).toHaveTextContent('They do not confirm the edition.')
+    expect(screen.getByText('Edition match needs review')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Review proposed identifier' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open in CWA ↗' })).toHaveAttribute('href', 'https://cwa.example/root/book/17')
+  })
+
+  it('keeps edition navigation and CWA claims when covers are missing or fail to load', async () => {
+    vi.mocked(api.calibreAuditIdentity).mockResolvedValue({ bookId: 5, calibreId: 17, rootKey: 'openlibrary:OL1W', hasOwnedCover: true,
+      evidence: [{ status: 'root', method: 'exact_editions', canonicalIdentity: 'openlibrary:OL1W', provider: 'openlibrary',
+        editionId: 'OL4M', workConfidence: 'exact', editionConfidence: 'unresolved', providerMetadata: { ebook: true,
+          imageUrl: 'https://covers.openlibrary.org/b/id/1-L.jpg' } }],
+      edition: { confidence: 'ambiguous', reason: 'Several editions', candidates: [
+        { provider: 'openlibrary', editionId: 'OL4M', reasons: [] }, { provider: 'openlibrary', editionId: 'OL5M', reasons: [] },
+      ] },
+    })
+    renderPage()
+    const candidate = await screen.findByRole('img', { name: 'OpenLibrary edition OL4M cover' })
+    fireEvent.error(candidate)
+    fireEvent.error(screen.getByRole('img', { name: 'Cover stored with the current Calibre/CWA book' }))
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: 'OL4M ↗' }).every(link => link.getAttribute('href') === 'https://openlibrary.org/books/OL4M')).toBe(true)
+    expect(screen.getAllByRole('link', { name: 'OL5M ↗' }).every(link => link.getAttribute('href') === 'https://openlibrary.org/books/OL5M')).toBe(true)
+    expect(screen.getByText('Owned title')).toBeInTheDocument()
+    expect(screen.getByText('Edition match needs review')).toBeInTheDocument()
+  })
+
+  it('refuses unsafe, unrooted or conflicting artwork without suppressing candidate IDs', async () => {
+    const raw = ['javascript:alert(1)', 'http://insecure.example/image.jpg', 'https://user:pass@example.org/a.jpg',
+      'https://example.org/a.jpg#fragment', 'https://example.org/other.jpg']
+    vi.mocked(api.calibreAuditIdentity).mockResolvedValue({ bookId: 5, calibreId: 17, rootKey: 'openlibrary:OL1W', evidence: [
+      ...raw.map((imageUrl, i) => ({ status: 'root', method: 'exact_editions', canonicalIdentity: 'openlibrary:OL1W',
+        provider: 'openlibrary', editionId: `OL${i + 4}M`, workConfidence: 'exact', editionConfidence: 'unresolved',
+        providerMetadata: { ebook: true, imageUrl } })),
+      { status: 'candidate', method: 'exact_editions', canonicalIdentity: 'openlibrary:OL1W', provider: 'openlibrary',
+        editionId: 'OL9M', workConfidence: 'low', editionConfidence: 'unresolved', providerMetadata: { ebook: true, imageUrl: 'https://example.org/unrooted.jpg' } },
+      { status: 'root', method: 'exact_editions', canonicalIdentity: 'another-work', provider: 'openlibrary',
+        editionId: 'OL10M', workConfidence: 'exact', editionConfidence: 'unresolved', providerMetadata: { ebook: true, imageUrl: 'https://example.org/wrong.jpg' } },
+      ...[1, 2].map(i => ({ status: 'root', method: 'exact_editions', canonicalIdentity: 'openlibrary:OL1W',
+        provider: 'openlibrary', editionId: 'OL11M', workConfidence: 'exact', editionConfidence: 'unresolved',
+        providerMetadata: { ebook: true, imageUrl: `https://example.org/${i}.jpg` } })),
+    ], edition: { confidence: 'unresolved', reason: 'No winner', candidates: Array.from({ length: 8 }, (_, i) =>
+      ({ provider: 'openlibrary', editionId: `OL${i + 4}M`, reasons: [] })) } })
+    renderPage()
+    expect(await screen.findByText('Exact edition not identified')).toBeInTheDocument()
+    expect(screen.getAllByRole('img')).toHaveLength(1) // only OL8M has an unambiguous, HTTPS source
+    expect(screen.getByRole('img')).toHaveAttribute('alt', 'OpenLibrary edition OL8M cover')
+    for (let i = 4; i <= 11; i++) expect(screen.getAllByRole('link', { name: `OL${i}M ↗` }).every(link => link.getAttribute('rel') === 'noopener noreferrer')).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Review proposed identifier' })).not.toBeInTheDocument()
+  })
+
   it('uses the same identifier-add gate for blocked copy and visible action across overlapping reasons', async () => {
     const scenarios: Array<{ name: string; enabled: boolean; item: CalibreAuditFinding; explanation: RegExp }> = [
       { name: 'disabled even on a conflict', enabled: false, item: { ...missing, findingType: 'identifier_conflict', assessment: 'ambiguous', evidenceKey: 'isbn' }, explanation: /Adding identifiers is turned off/ },
@@ -729,5 +808,13 @@ describe('CalibreAuditPage', () => {
       view.unmount()
     }
     expect(api.calibreAuditIdentifierProposals).not.toHaveBeenCalled()
+  })
+
+  it('does not request artwork before the paged identity snapshot or for historical rows', async () => {
+    vi.mocked(api.calibreAudit).mockResolvedValue({ items: [{ ...finding, state: 'unmatched' }], total: 19000, limit: 50, offset: 0 })
+    renderPage()
+    expect(await screen.findByText('Previously stored in Calibre')).toBeInTheDocument()
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+    expect(api.calibreAuditIdentity).not.toHaveBeenCalled()
   })
 })

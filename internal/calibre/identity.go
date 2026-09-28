@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -93,6 +94,9 @@ func (s *AuthoritativeService) IdentitySnapshot(ctx context.Context, bookID int6
 		return snapshot, nil
 	}
 	snapshot.Edition = ResolveOwnedEdition(*snapshot, cb)
+	// Only the currently linked Calibre row can advertise a local cover. This
+	// presentation flag is not persisted or used in edition resolution.
+	snapshot.HasOwnedCover = cb != nil && cb.CoverPath != ""
 	return snapshot, nil
 }
 
@@ -632,6 +636,12 @@ func identityEditionEvidence(book *models.Book, cb *CalibreBook, obs metadata.Ra
 	}
 	metadata := map[string]any{"title": ed.Title, "publisher": ed.Publisher, "language": ed.Language,
 		"format": ed.Format, "ebook": auditExternalEdition(&ed)}
+	// The cover belongs to this exact provider edition, not to the work or
+	// the owned CWA copy. Persist it only as display metadata; the resolver
+	// never reads imageUrl when deciding confidence or write eligibility.
+	if cover := editionImageURL(ed.ImageURL); cover != "" {
+		metadata["imageUrl"] = cover
+	}
 	if ed.PublishDate != nil {
 		metadata["publicationDate"] = ed.PublishDate.Format("2006-01-02")
 	}
@@ -643,6 +653,17 @@ func identityEditionEvidence(book *models.Book, cb *CalibreBook, obs metadata.Ra
 		WorkConfidence: "exact", EditionConfidence: "unresolved",
 		NormalizedIdentifiers: ids, ProviderMetadata: metadata, CheckedAt: checked,
 	}
+}
+
+func editionImageURL(raw string) string {
+	if len(raw) == 0 || len(raw) > 2048 || raw != strings.TrimSpace(raw) {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Fragment != "" || u.Opaque != "" {
+		return ""
+	}
+	return raw // the image proxy performs strict SSRF checks before fetching
 }
 
 func identityAddISBN(ids map[string][]string, raw string) {

@@ -1,4 +1,4 @@
-import { request } from './core'
+import { apiURL, request } from './core'
 
 // CalibreMode selects which integration flow runs after a successful
 // Bindery import. 'off' skips Calibre entirely, 'calibredb' shells out to
@@ -147,17 +147,19 @@ export interface CalibreIdentitySnapshot {
   bookId: number
   calibreId: number
   rootKey: string
+  hasOwnedCover?: boolean
   evidence: Array<{
     status: string
     workConfidence: string
     editionConfidence: string
     editionId?: string
+    canonicalIdentity?: string
     provider?: string
     method?: string
     provenanceGroup?: string
     key?: string
     checkedAt?: string
-    providerMetadata?: { title?: string; ebook?: boolean }
+    providerMetadata?: { title?: string; publisher?: string; publicationDate?: string; ebook?: boolean; imageUrl?: string }
   }>
   lookups?: Array<{ method: string; outcome: string; provider: string }>
   claims?: Array<{ identifierType: string; status: string }>
@@ -328,6 +330,7 @@ export const calibreApi = {
   calibreAuditIdentifierAttempts: (id: number) =>
     request<{ items: CalibreIdentifierAttempt[] }>(`/calibre/audit/${id}/identifier-attempts`),
   calibreAuditIdentity: (bookId: number) => request<CalibreIdentitySnapshot>(`/calibre/identity/${bookId}`),
+  calibreOwnedCoverURL: (bookId: number) => apiURL(`/calibre/identity/${bookId}/cover`),
   calibreAuditRecheck: () => request<CalibreAuditRecheckStatus>('/calibre/audit/recheck', { method: 'POST' }),
   calibreAuditRecheckStatus: () => request<CalibreAuditRecheckStatus>('/calibre/audit/recheck/status'),
   calibreReconcile: () => request<CalibreReconciliationStatus>('/calibre/reconciliation', { method: 'POST' }),

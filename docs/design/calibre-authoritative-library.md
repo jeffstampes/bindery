@@ -141,6 +141,7 @@ Each slice is checked against the authority invariants above.
 | `BinderyMismatch` write-back | Implemented (#8) | Optional, separately opt-in, one fixed Bindery-owned tag | 3, 8 |
 | Human-approved identifier additions | Implemented (#28; additions only) | Separately opted-in review/approval of uniquely supported missing work/provider IDs; no replacement, removal, edition resolution or bulk | 3, 7, 8 |
 | Owned edition resolution | Implemented (#29; read-only) | Resolve only exact canonical-work provider editions, model artifact/write-back lineage, and use selected editions in advisory audit | 3, 6, 7 |
+| Visual edition review | Implemented (#33; read-only) | Compare current CWA cover with rooted provider edition covers on the paged review queue; never an identity signal | 3, 6, 7, 9 |
 
 Reconciliation satisfies ebook ownership for confident matches and runs the
 backend metadata audit. It creates no Calibre-backed catalogue book. The
@@ -323,6 +324,34 @@ asserted from a work release date. Edition-scoped identifier comparisons prefer
 the selected edition instead of aggregating every edition of the work. This
 changes no CWA metadata, ebook bytes, #28 writer eligibility or #30 field
 reconciliation.
+
+### Visual edition evidence in review (#33)
+
+The admin Calibre audit page shows covers only as human-review evidence after
+loading a current identity snapshot for a book on the **paged** review queue.
+The current-copy thumbnail, when available, comes from that matched Calibre
+row's own `cover.jpg`, served on demand by admin-only
+`GET /api/v1/calibre/identity/{bookID}/cover`. The endpoint rechecks the
+active ownership link and rooted snapshot, confines the file to the configured
+Calibre library, refuses symlinks (including links to another book), non-JPEG
+and oversized files, and returns no filesystem path. It reads no other covers
+and is unavailable when authoritative mode is off. No CWA cover is inferred
+from a provider image when the local cover is missing.
+
+Provider edition thumbnails come only from `ImageURL` on the **exact** canonical
+provider edition record already returned by discovery; the raw URL lives in
+that edition's persisted `providerMetadata.imageUrl`, not a work-level or
+Calibre-owned field. The UI requires that record to be rooted in the same work,
+from `exact_editions`, an ebook, and uniquely associated with the displayed
+provider + edition ID. Invalid/non-HTTPS URLs are omitted; valid URLs use the
+existing SSRF-guarded, image-only, deduplicated/cached `/api/v1/images` proxy.
+Browser images use lazy loading, and a failed image disappears without hiding
+its source record, ID, or navigation. No new provider requests are made to
+retrieve artwork, no cover is fetched during a full-library audit, and
+historical findings do not fetch current cover data. The current CWA slot and
+provider candidates are explicitly labelled separately; thumbnails are not
+edition attestation. Artwork does **not** enter work/edition resolution,
+ownership confidence, audit comparisons, or identifier-add/write eligibility.
 
 ### Backend metadata audit (#6)
 

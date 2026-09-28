@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -96,6 +97,58 @@ func (h *CalibreAuditHandler) Identity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, snapshot)
+}
+
+// OwnedCover serves the current matched Calibre book's own JPEG, never a
+// provider image. It is admin-only at the router and does not expose paths.
+func (h *CalibreAuditHandler) OwnedCover(w http.ResponseWriter, r *http.Request) {
+	if !h.available(w, r) {
+		return
+	}
+	bookID, err := strconv.ParseInt(chi.URLParam(r, "bookID"), 10, 64)
+	if err != nil || bookID <= 0 {
+		http.Error(w, "invalid book id", http.StatusBadRequest)
+		return
+	}
+	reader, ok := h.service.(interface {
+		OpenOwnedCover(context.Context, int64) (*os.File, error)
+	})
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	file, err := reader.OpenOwnedCover(r.Context(), bookID)
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	if file == nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer func() { _ = file.Close() }()
+	var header [512]byte
+	n, err := file.Read(header[:])
+	if err != nil && !errors.Is(err, io.EOF) {
+		writeServerError(w, r, err)
+		return
+	}
+	if http.DetectContentType(header[:n]) != "image/jpeg" {
+		http.NotFound(w, r)
+		return
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	info, err := file.Stat()
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "private, max-age=60")
+	http.ServeContent(w, r, "cover.jpg", info.ModTime(), file)
 }
 
 // ScanArtifacts explicitly reads the linked owned files; it is never triggered

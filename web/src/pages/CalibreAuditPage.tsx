@@ -13,6 +13,7 @@ import {
   type CalibreIdentifierAttempt,
 } from '../api/client'
 import { providerDisplayName } from '../util/metadataSource'
+import { apiURL } from '../api/core'
 import CalibreIdentifierLink from '../components/CalibreIdentifierLink'
 import Pagination from '../components/Pagination'
 import { useServerPagination } from '../components/usePagination'
@@ -103,6 +104,30 @@ function Evidence({ values, identifierType }: { values: CalibreAuditEvidence[]; 
   })}</ul>
 }
 
+function candidateCoverURL(snapshot: CalibreIdentitySnapshot, provider: string, editionId: string): string | null {
+  // Only the rooted exact-edition record of this work can supply artwork for
+  // this candidate. Never borrow a work cover, CWA claim, or search hit.
+  const records = snapshot.evidence.filter(e => e.status === 'root' && e.method === 'exact_editions' &&
+    e.canonicalIdentity === snapshot.rootKey && e.provider === provider && e.editionId === editionId &&
+    e.providerMetadata?.ebook === true)
+  if (records.length !== 1 || typeof records[0].providerMetadata?.imageUrl !== 'string') return null
+  const raw = records[0].providerMetadata.imageUrl
+  try {
+    const url = new URL(raw)
+    if (raw.length > 2048 || url.protocol !== 'https:' || !url.hostname || url.username || url.password || url.hash) return null
+    // The existing image proxy enforces strict SSRF and caches only image bytes.
+    return apiURL(`/images?url=${encodeURIComponent(raw)}`)
+  } catch { return null }
+}
+
+function CoverThumbnail({ src, alt }: { src: string; alt: string }) {
+  const [failed, setFailed] = useState(false)
+  if (failed) return null
+  return <img src={src} alt={alt} loading="lazy" decoding="async" width="80" height="112"
+    className="h-28 w-20 shrink-0 rounded border border-slate-300 dark:border-zinc-700 object-contain"
+    onError={() => setFailed(true)} />
+}
+
 function IdentityContext({ finding, loadIdentity }: { finding: CalibreAuditFinding; loadIdentity: (bookId: number) => Promise<CalibreIdentitySnapshot> }) {
   const { t } = useTranslation()
   const [snapshot, setSnapshot] = useState<CalibreIdentitySnapshot | null>(null)
@@ -127,13 +152,40 @@ function IdentityContext({ finding, loadIdentity }: { finding: CalibreAuditFindi
           <> · {providerDisplayName(resolution.provider || '')} <CalibreIdentifierLink type="foreign_id" value={resolution.editionId} provider={resolution.provider} /></>}</p>
         <p className="text-fg-muted">{t('calibreAudit.editionExplanation.' + explanation)}</p>
         {resolution?.artifactWarning === 'possibly_calibre_derived' && <p className="text-fg-muted">{t('calibreAudit.possiblyDerived')}</p>}
-        {confidence === 'ambiguous' && !!resolution?.candidates?.length && <div>
-          <p className="font-medium">{t('calibreAudit.candidates')}</p>
-          <p className="text-fg-muted">{t('calibreAudit.candidateCaveat')}</p>
-          <ul className="list-disc pl-5">{resolution.candidates.map(candidate => <li key={candidate.provider + ':' + candidate.editionId}>
-            {snapshot.evidence.find(e => e.editionId === candidate.editionId && e.provider === candidate.provider)?.providerMetadata?.title || providerDisplayName(candidate.provider)} · <CalibreIdentifierLink type="foreign_id" value={candidate.editionId} provider={candidate.provider} />
-          </li>)}</ul>
+        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="rounded border border-slate-300 dark:border-zinc-700 p-2" aria-label={t('calibreAudit.currentCopy')}>
+          <p className="font-medium">{t('calibreAudit.currentCopy')} · {t('calibreAudit.calibreId', { id: finding.calibreId })}</p>
+          <div className="flex gap-3 mt-1">
+            {snapshot.hasOwnedCover && <CoverThumbnail src={api.calibreOwnedCoverURL(finding.bookId)} alt={t('calibreAudit.currentCover')} />}
+            <p className="text-xs text-fg-muted">{t('calibreAudit.currentDetails')}</p>
+          </div>
+        </div>
+        {!!resolution?.candidates?.length && <div>
+          {(confidence === 'ambiguous' || confidence === 'unresolved') && <>
+            <p className="font-medium">{t('calibreAudit.candidates')}</p>
+            <p className="text-fg-muted">{t('calibreAudit.candidateCaveat')}</p>
+          </>}
+          <ul className="mt-2 grid gap-2">{resolution.candidates.filter(candidate =>
+            confidence === 'ambiguous' || confidence === 'unresolved' ||
+            (candidate.editionId === resolution.editionId && candidate.provider === resolution.provider)
+          ).map(candidate => {
+            const record = snapshot.evidence.find(e => e.status === 'root' && e.method === 'exact_editions' &&
+              e.canonicalIdentity === snapshot.rootKey && e.provider === candidate.provider && e.editionId === candidate.editionId)
+            const title = record?.providerMetadata?.title || snapshot.evidence.find(e =>
+              e.editionId === candidate.editionId && e.provider === candidate.provider)?.providerMetadata?.title
+            const image = candidateCoverURL(snapshot, candidate.provider, candidate.editionId)
+            return <li key={candidate.provider + ':' + candidate.editionId} className="flex gap-3 rounded border border-slate-300 dark:border-zinc-700 p-2">
+              {image && <CoverThumbnail src={image} alt={t('calibreAudit.candidateCover', { provider: providerDisplayName(candidate.provider), id: candidate.editionId })} />}
+              <div className="min-w-0 break-words">
+                <p className="font-medium">{title || providerDisplayName(candidate.provider)} · <CalibreIdentifierLink type="foreign_id" value={candidate.editionId} provider={candidate.provider} /></p>
+                {record?.providerMetadata?.publisher && <p>{record.providerMetadata.publisher}</p>}
+                {record?.providerMetadata?.publicationDate && <p>{record.providerMetadata.publicationDate}</p>}
+              </div>
+            </li>
+          })}</ul>
+          <p className="text-xs text-fg-muted">{t('calibreAudit.coverCaveat')}</p>
         </div>}
+        </div>
         <details className="text-xs text-fg-muted"><summary className="cursor-pointer">{t('calibreAudit.editionDetails')}</summary>
           <p>{t('calibreAudit.rawConfidence')}: {confidence || t('calibreAudit.unknown')} · {resolution?.reasonCode || t('calibreAudit.unknown')}</p>
           {snapshot.rootKey && <p>{t('calibreAudit.rootKey')}: {snapshot.rootKey}</p>}
