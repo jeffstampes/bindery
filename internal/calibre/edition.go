@@ -35,9 +35,9 @@ func classifyArtifactLineage(scan *models.CalibreArtifactScan, events []models.C
 // discovery or add candidates from a different work. A provider record is one
 // source regardless of how many identifiers or metadata fields it contains.
 func ResolveOwnedEdition(snapshot models.CalibreIdentitySnapshot, cb *CalibreBook) models.CalibreEditionResolution {
-	result := models.CalibreEditionResolution{Confidence: "unresolved", Reason: "No eligible edition of the canonical work has identifying evidence.", Candidates: []models.CalibreEditionCandidate{}}
+	result := models.CalibreEditionResolution{Confidence: "unresolved", ReasonCode: models.CalibreEditionReasonNoEvidence, Reason: "No eligible edition of the canonical work has identifying evidence.", Candidates: []models.CalibreEditionCandidate{}}
 	if cb == nil || snapshot.CalibreID != cb.CalibreID || snapshot.RootKey == "" {
-		result.Reason = "Canonical work or active ownership link is unavailable."
+		result.ReasonCode, result.Reason = models.CalibreEditionReasonNoWork, "Canonical work or active ownership link is unavailable."
 		return result
 	}
 	rooted := false
@@ -48,7 +48,7 @@ func ResolveOwnedEdition(snapshot models.CalibreIdentitySnapshot, cb *CalibreBoo
 		}
 	}
 	if !rooted {
-		result.Reason = "Exact canonical provider work lookup is unavailable."
+		result.ReasonCode, result.Reason = models.CalibreEditionReasonNoWorkLookup, "Exact canonical provider work lookup is unavailable."
 		return result
 	}
 	type editionClaim struct {
@@ -69,7 +69,7 @@ func ResolveOwnedEdition(snapshot models.CalibreIdentitySnapshot, cb *CalibreBoo
 		candidates = append(candidates, candidate{e: e})
 	}
 	if len(candidates) == 0 {
-		result.Reason = "No ebook editions were returned by the canonical work's exact-editions lookup."
+		result.ReasonCode, result.Reason = models.CalibreEditionReasonNoEbookEditions, "No ebook editions were returned by the canonical work's exact-editions lookup."
 		return result
 	}
 	cwaIDs := calibreAuditIdentifiers(cb)
@@ -126,6 +126,9 @@ func ResolveOwnedEdition(snapshot models.CalibreIdentitySnapshot, cb *CalibreBoo
 		if scan.BookID != snapshot.BookID || scan.CalibreID != snapshot.CalibreID ||
 			scan.Historical || scan.Stale || scan.Outcome != "scanned" || len(scan.Identifiers) == 0 {
 			continue
+		}
+		if scan.Lineage == "potentially_cwa_derived" {
+			result.ArtifactWarning = models.CalibreEditionWarningPossiblyDerived
 		}
 		fileKey := fmt.Sprintf("%s/%s/%s", scan.Format, scan.FileName, scan.SHA256)
 		for _, id := range scan.Identifiers {
@@ -253,7 +256,7 @@ func ResolveOwnedEdition(snapshot models.CalibreIdentitySnapshot, cb *CalibreBoo
 	}
 	if !complete {
 		result.Confidence = "ambiguous"
-		result.Reason = "The canonical provider's exact-editions lookup is incomplete; additional editions may share these identifiers."
+		result.ReasonCode, result.Reason = models.CalibreEditionReasonIncomplete, "The canonical provider's exact-editions lookup is incomplete; additional editions may share these identifiers."
 		return result
 	}
 	// Soft metadata may distinguish editions only when one *normalized
@@ -348,6 +351,7 @@ func ResolveOwnedEdition(snapshot models.CalibreIdentitySnapshot, cb *CalibreBoo
 		(len(cwaMatches) == 1 && len(retainedMatches) == 1 && cwaMatches[0] != retainedMatches[0]) ||
 		(len(artifactMatches) == 1 && len(retainedMatches) == 1 && artifactMatches[0] != retainedMatches[0]) {
 		result.Confidence = "ambiguous"
+		result.ReasonCode = models.CalibreEditionReasonConflicting
 		result.Reason = "Conflicting or multiple edition identifiers remain within the canonical work. " + strings.Join(slices.Compact(conflicting), " ")
 		return result
 	}
@@ -355,23 +359,23 @@ func ResolveOwnedEdition(snapshot models.CalibreIdentitySnapshot, cb *CalibreBoo
 	if len(artifactMatches) == 1 {
 		selected = artifactMatches[0]
 		result.Confidence = "exact"
-		result.Reason = "A complete pre-write-back artifact ISBN uniquely matches a canonical-work ebook edition; file fields count as one source."
+		result.ReasonCode, result.Reason = models.CalibreEditionReasonOriginalFile, "A complete pre-write-back artifact ISBN uniquely matches a canonical-work ebook edition; file fields count as one source."
 	} else if len(retainedMatches) == 1 {
 		selected = retainedMatches[0]
 		result.Confidence = "high"
-		result.Reason = "A historical pre-write-back observation and the current file agree on an ISBN; changed file bytes prevent an exact physical-edition assertion."
+		result.ReasonCode, result.Reason = models.CalibreEditionReasonHistoricFile, "A historical pre-write-back observation and the current file agree on an ISBN; changed file bytes prevent an exact physical-edition assertion."
 	} else if claimWinner >= 0 {
 		selected = claimWinner
 		result.Confidence = "high"
-		result.Reason = "The CWA native edition ID and ISBN converge on one provider edition; they are one claim (correlated CWA fields), not independent corroboration."
+		result.ReasonCode, result.Reason = models.CalibreEditionReasonCalibreIDs, "The CWA native edition ID and ISBN converge on one provider edition; they are one claim (correlated CWA fields), not independent corroboration."
 	} else if softWinner >= 0 {
 		selected = softWinner
 		result.Confidence = "high"
-		result.Reason = softReason
+		result.ReasonCode, result.Reason = models.CalibreEditionReasonCalibreFields, softReason
 	} else if len(cwaMatches) == 1 {
 		selected = cwaMatches[0]
 		result.Confidence = "high"
-		result.Reason = "A CWA identifier uniquely matches a canonical-work ebook edition; correlated CWA fields are one claim, not independent corroboration."
+		result.ReasonCode, result.Reason = models.CalibreEditionReasonCalibreIDs, "A CWA identifier uniquely matches a canonical-work ebook edition; correlated CWA fields are one claim, not independent corroboration."
 	}
 	if selected >= 0 {
 		result.EditionID = candidates[selected].e.EditionID
@@ -380,7 +384,7 @@ func ResolveOwnedEdition(snapshot models.CalibreIdentitySnapshot, cb *CalibreBoo
 	}
 	if len(candidates) > 1 {
 		result.Confidence = "ambiguous"
-		result.Reason = "Multiple canonical-work editions exist, but no independent or unique edition identifier selects one."
+		result.ReasonCode, result.Reason = models.CalibreEditionReasonMultiple, "Multiple canonical-work editions exist, but no independent or unique edition identifier selects one."
 	}
 	return result
 }

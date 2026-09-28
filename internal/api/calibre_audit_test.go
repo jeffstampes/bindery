@@ -97,7 +97,7 @@ func TestCalibreAuditReviewRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	identityPath := "/calibre/identity/" + strconv.FormatInt(book.ID, 10)
-	if rec := request("admin", http.MethodGet, identityPath, ""); rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte(`"rootKey":"openlibrary:OL1W"`)) {
+	if rec := request("admin", http.MethodGet, identityPath, ""); rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte(`"rootKey":"openlibrary:OL1W"`)) || !bytes.Contains(rec.Body.Bytes(), []byte(`"reasonCode":"ownership_unavailable"`)) {
 		t.Fatalf("identity snapshot: %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := request("user", http.MethodGet, identityPath, ""); rec.Code != http.StatusForbidden {
