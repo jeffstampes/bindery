@@ -16,6 +16,7 @@ type CalibreIdentitySnapshot struct {
 	ArtifactHistory []CalibreArtifactScan      `json:"artifactHistory,omitempty"`
 	Writebacks      []CalibreArtifactWriteback `json:"writebacks,omitempty"`
 	Edition         CalibreEditionResolution   `json:"edition"`
+	HasOwnedCover   bool                       `json:"hasOwnedCover,omitempty"` // current CWA file only; response-only presentation hint
 	CheckedAt       time.Time                  `json:"checkedAt"`
 }
 

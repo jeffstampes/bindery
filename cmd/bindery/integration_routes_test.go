@@ -63,6 +63,9 @@ func (h *stubIntegrationHandler) Reopen(w http.ResponseWriter, _ *http.Request) 
 func (h *stubIntegrationHandler) Identity(w http.ResponseWriter, _ *http.Request) {
 	h.record("identity", w)
 }
+func (h *stubIntegrationHandler) OwnedCover(w http.ResponseWriter, _ *http.Request) {
+	h.record("owned-cover", w)
+}
 func (h *stubIntegrationHandler) ScanArtifacts(w http.ResponseWriter, _ *http.Request) {
 	h.record("scan-artifacts", w)
 }
@@ -121,6 +124,7 @@ func TestIntegrationRoutesRequireAdmin(t *testing.T) {
 		{"calibre identifier add", http.MethodPost, "/calibre/audit/1/identifier-add"},
 		{"calibre identifier attempts", http.MethodGet, "/calibre/audit/1/identifier-attempts"},
 		{"calibre identity evidence", http.MethodGet, "/calibre/identity/1"},
+		{"calibre owned cover", http.MethodGet, "/calibre/identity/1/cover"},
 		{"calibre artifact scan", http.MethodPost, "/calibre/identity/1/scan"},
 		{"calibre artifact writeback", http.MethodPost, "/calibre/identity/1/writeback"},
 	}
@@ -171,6 +175,7 @@ func TestIntegrationRoutesAllowAdmin(t *testing.T) {
 		{http.MethodPost, "/calibre/audit/1/identifier-add", "identifier-add"},
 		{http.MethodGet, "/calibre/audit/1/identifier-attempts", "identifier-attempts"},
 		{http.MethodGet, "/calibre/identity/1", "identity"},
+		{http.MethodGet, "/calibre/identity/1/cover", "owned-cover"},
 		{http.MethodPost, "/calibre/identity/1/writeback", "artifact-writeback"},
 	}
 	for _, tt := range tests {
