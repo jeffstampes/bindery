@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
-import { api, ApiError, type CalibreAuditFinding, type CalibreIdentifierProposal } from '../api/client'
+import { api, ApiError, type CalibreAuditFinding, type CalibreIdentitySnapshot, type CalibreIdentifierProposal } from '../api/client'
 import CalibreAuditPage from './CalibreAuditPage'
 import en from '../i18n/locales/en.json'
 
@@ -26,7 +26,7 @@ const finding: CalibreAuditFinding = {
   findingType: 'title_difference', assessment: 'ambiguous',
   calibreEvidence: [{ value: 'Owned title', source: 'calibre.books.title' }],
   binderyEvidence: [{ value: 'Provider title', source: 'books.title', provider: 'openlibrary', foreignId: 'OL1W' }],
-  matchMethod: 'isbn', matchConfidence: 'exact', reason: 'Editions may differ.',
+  matchMethod: 'isbn', matchConfidence: 'exact', reason: 'The owned title differs from the stored external work or uniquely matched edition title; translations and subtitles need human review.',
   comparisonFingerprint: 'fp1', state: 'unresolved', createdAt: '2026-01-01', updatedAt: '2026-01-01',
 }
 
@@ -35,7 +35,7 @@ const proposal: CalibreIdentifierProposal = {
   findingId: 3, bookId: 5, calibreId: 17, comparisonFingerprint: 'fp1', identifierType: 'openlibrary',
   currentValue: '', proposedValue: 'OL12W', action: 'add', evidenceKeys: ['openlibrary:OL12W'],
   evidence: [{ value: 'OL12W', source: 'books.foreign_id', provider: 'openlibrary', foreignId: 'OL12W' }],
-  reason: 'Canonical provider work record',
+  reason: 'Exact canonical work or rooted ISBN corroboration; no edition identity asserted.',
 }
 
 function renderPage() { return render(<MemoryRouter><CalibreAuditPage /></MemoryRouter>) }
@@ -50,7 +50,8 @@ beforeEach(() => {
   vi.mocked(api.calibreAuditIdentity).mockResolvedValue({ bookId: 5, calibreId: 17, rootKey: 'openlibrary:OL1W', evidence: [
     { status: 'root', workConfidence: 'canonical', editionConfidence: 'unresolved' },
     { status: 'candidate', workConfidence: 'candidate', editionConfidence: 'candidate', editionId: 'OL4M' },
-  ], edition: { confidence: 'ambiguous', reason: 'Several editions share the claimed ISBN.', candidates: [
+  ], edition: { confidence: 'ambiguous', reasonCode: 'multiple_editions',
+    reason: 'Multiple canonical-work editions exist, but no independent or unique edition identifier selects one.', candidates: [
     { provider: 'openlibrary', editionId: 'OL4M', reasons: ['CWA claims isbn (one correlated source)'] },
     { provider: 'openlibrary', editionId: 'OL5M', reasons: [] },
   ] } })
@@ -64,6 +65,13 @@ beforeEach(() => {
 })
 
 describe('CalibreAuditPage', () => {
+  it('discloses optional mismatch-tag writes separately from approved identifier additions', async () => {
+    renderPage()
+    expect(screen.getByText(/checks can update Calibre mismatch tags without per-finding approval/)).toBeInTheDocument()
+    expect(screen.getByText(/it does not change other Calibre metadata/)).toBeInTheDocument()
+    expect(screen.getByText(/Adding identifiers requires separate approval/)).toBeInTheDocument()
+  })
+
   it('runs reconciliation, shows its stage, disables both starts, and reports completion', async () => {
     vi.mocked(api.calibreReconcileStatus).mockResolvedValueOnce({ state: 'idle', completedStages: [] })
       .mockResolvedValueOnce({ state: 'completed', completedStages: ['ownership', 'identity', 'audit'], result: {
@@ -73,16 +81,16 @@ describe('CalibreAuditPage', () => {
         transitions: { newUnresolved: 1, resolved: 0, ignoredPreserved: 2, becameHistorical: 0 },
       } })
     renderPage()
-    const run = await screen.findByRole('button', { name: 'Run reconciliation' })
+    const run = await screen.findByRole('button', { name: 'Refresh book matches and comparisons' })
     await waitFor(() => expect(run).toBeEnabled())
     fireEvent.click(run)
-    expect(await screen.findByText(/Running: ownership matching/)).toBeInTheDocument()
+    expect(await screen.findByText(/Running: matching books/)).toBeInTheDocument()
     expect(run).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Recheck library' })).toBeDisabled()
-    expect(await screen.findByText(/Ownership: 7 Bindery books/, {}, { timeout: 3500 })).toBeInTheDocument()
-    expect(screen.getByText(/2 works refreshed, 6 provider evidence records/)).toBeInTheDocument()
-    expect(screen.getByText(/3 cached file scans for current ownership links; no files rescanned/)).toBeInTheDocument()
-    expect(screen.getByText(/1 newly unresolved, 0 resolved, 2 ignored decisions preserved/)).toBeInTheDocument()
+    expect(await screen.findByText(/Books: 7 in Bindery/, {}, { timeout: 3500 })).toBeInTheDocument()
+    expect(screen.getByText(/2 books checked, 6 records retrieved/)).toBeInTheDocument()
+    expect(screen.getByText(/3 earlier scans reused; no files scanned again/)).toBeInTheDocument()
+    expect(screen.getByText(/1 new differences to review, 0 resolved, 2 ignored items kept/)).toBeInTheDocument()
     await waitFor(() => expect(api.calibreAudit).toHaveBeenCalledTimes(2))
   })
 
@@ -92,8 +100,8 @@ describe('CalibreAuditPage', () => {
       identity: { refreshedWorks: 1, evidenceRecords: 2, failedLookups: 1, truncatedLookups: 1, unconfiguredLookups: 1, notAttemptedLookups: 0, deferredWorks: 3, unresolvedRoots: 0, discoveryUnavailable: false },
     } })
     renderPage()
-    expect(await screen.findByText(/Discovery was partial/)).toBeInTheDocument()
-    expect(screen.getByText(/1 failed, 1 truncated, 1 unconfigured/)).toBeInTheDocument()
+    expect(await screen.findByText(/Some provider information could not be retrieved/)).toBeInTheDocument()
+    expect(screen.getByText(/1 failed, 1 incomplete, 1 not configured/)).toBeInTheDocument()
   })
 
   it('restores a failed run and surfaces start errors without a success summary', async () => {
@@ -101,11 +109,11 @@ describe('CalibreAuditPage', () => {
     vi.mocked(api.calibreReconcile).mockRejectedValueOnce(new Error('worker unavailable'))
     renderPage()
     expect(await screen.findByText(/Reconciliation failed: read-only library unavailable/)).toBeInTheDocument()
-    const run = screen.getByRole('button', { name: 'Run reconciliation' })
+    const run = screen.getByRole('button', { name: 'Refresh book matches and comparisons' })
     await waitFor(() => expect(run).toBeEnabled())
     fireEvent.click(run)
     expect(await screen.findByText(/Could not start reconciliation: worker unavailable/)).toBeInTheDocument()
-    expect(screen.queryByText(/Reconciliation completed/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Book matches and comparisons refreshed/)).not.toBeInTheDocument()
   })
 
   it('follows an existing reconciliation on conflict without starting a second job', async () => {
@@ -113,10 +121,10 @@ describe('CalibreAuditPage', () => {
     vi.mocked(api.calibreReconcileStatus).mockResolvedValueOnce({ state: 'idle', completedStages: [] })
       .mockResolvedValueOnce({ state: 'running', stage: 'identity', completedStages: ['ownership'] })
     renderPage()
-    const run = await screen.findByRole('button', { name: 'Run reconciliation' })
+    const run = await screen.findByRole('button', { name: 'Refresh book matches and comparisons' })
     await waitFor(() => expect(run).toBeEnabled())
     fireEvent.click(run)
-    expect(await screen.findByText(/Running: identity evidence/)).toBeInTheDocument()
+    expect(await screen.findByText(/Running: checking provider records/)).toBeInTheDocument()
     expect(api.calibreReconcile).toHaveBeenCalledTimes(1)
     expect(run).toBeDisabled()
   })
@@ -131,7 +139,7 @@ describe('CalibreAuditPage', () => {
     expect((await screen.findByRole('link', { name: 'OL12W ↗' })).closest('p')).toHaveTextContent('Request #21: add openlibrary=OL12W ↗ — failed')
     expect(screen.getByText(/Failure: database locked/)).toBeInTheDocument()
     expect(api.calibreAuditIdentifierAttempts).toHaveBeenCalledWith(3)
-    expect(screen.queryByRole('button', { name: 'Preview identifier additions' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Review proposed identifier' })).not.toBeInTheDocument()
   })
 
   it('fails closed when the independent write setting is absent, false or unreadable', async () => {
@@ -141,13 +149,13 @@ describe('CalibreAuditPage', () => {
       const view = renderPage()
       await screen.findByText('No stored value')
       await waitFor(() => expect(api.getSetting).toHaveBeenCalledWith('calibre.identifier_write_enabled'))
-      expect(screen.queryByRole('button', { name: 'Preview identifier additions' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Review proposed identifier' })).not.toBeInTheDocument()
       view.unmount()
     }
     vi.mocked(api.getSetting).mockRejectedValue(new Error('setting unavailable'))
     const view = renderPage()
     await screen.findByText('No stored value')
-    expect(screen.queryByRole('button', { name: 'Preview identifier additions' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Review proposed identifier' })).not.toBeInTheDocument()
     view.unmount()
     expect(api.calibreAuditIdentifierProposals).not.toHaveBeenCalled()
   })
@@ -162,8 +170,8 @@ describe('CalibreAuditPage', () => {
       evidence: [{ value: 'bad', source: 'books.foreign_id', provider: 'unknown', foreignId: 'javascript:alert(1)' }],
     }] })
     renderPage()
-    fireEvent.click(await screen.findByRole('button', { name: 'Preview identifier additions' }))
-    expect(await screen.findByText(/Canonical provider work record/)).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: 'Review proposed identifier' }))
+    expect((await screen.findAllByText(/Bindery found this missing book identifier in a provider record/)).length).toBeGreaterThan(0)
     expect(api.calibreAuditIdentifierProposals).toHaveBeenCalledWith(3)
     expect(screen.getAllByText('No stored value', { exact: false }).length).toBeGreaterThan(0)
     expect(screen.getAllByRole('link', { name: 'OL12W ↗' }).some(link => link.getAttribute('href') === 'https://openlibrary.org/works/OL12W')).toBe(true)
@@ -189,9 +197,10 @@ describe('CalibreAuditPage', () => {
       evidence: [{ value: '123', source: 'books.foreign_id', provider: 'hardcover', foreignId: 'hc:123' }],
     }] })
     renderPage()
-    fireEvent.click(await screen.findByRole('button', { name: 'Preview identifier additions' }))
-    expect((await screen.findAllByRole('link', { name: 'known-slug ↗' })).every(link => link.getAttribute('href') === 'https://hardcover.app/books/known-slug')).toBe(true)
-    expect(screen.getAllByRole('link', { name: 'known-slug ↗' })[0]).toHaveAttribute('rel', 'noopener noreferrer')
+    fireEvent.click(await screen.findByRole('button', { name: 'Review proposed identifier' }))
+    const links = await screen.findAllByRole('link', { name: 'known-slug ↗' })
+    expect(links.every(link => link.getAttribute('href') === 'https://hardcover.app/books/known-slug')).toBe(true)
+    expect(links[0]).toHaveAttribute('rel', 'noopener noreferrer')
     expect(screen.getByText('123').closest('li')).toHaveTextContent('hc:123')
     expect(screen.queryByRole('link', { name: '123 ↗' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'hc:123 ↗' })).not.toBeInTheDocument()
@@ -205,7 +214,7 @@ describe('CalibreAuditPage', () => {
     ], total: 4, limit: 50, offset: 0 })
     renderPage()
     await screen.findByText('4 findings match these filters')
-    expect(screen.queryByRole('button', { name: 'Preview identifier additions' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Review proposed identifier' })).not.toBeInTheDocument()
   })
 
   it('rejects stale proposals without posting and refreshes after a stale apply', async () => {
@@ -214,7 +223,7 @@ describe('CalibreAuditPage', () => {
     vi.mocked(api.calibreAuditIdentifierProposals).mockResolvedValueOnce({ items: [{ ...proposal, comparisonFingerprint: 'older' }] }).mockResolvedValueOnce({ items: [proposal] })
     vi.mocked(api.calibreAuditIdentifierAdd).mockRejectedValueOnce(new ApiError(409, { error: 'stale' }, 'stale'))
     renderPage()
-    const preview = await screen.findByRole('button', { name: 'Preview identifier additions' })
+    const preview = await screen.findByRole('button', { name: 'Review proposed identifier' })
     fireEvent.click(preview)
     expect(await screen.findByRole('alert')).toHaveTextContent(/finding changed/i)
     expect(api.calibreAuditIdentifierAdd).not.toHaveBeenCalled()
@@ -233,7 +242,7 @@ describe('CalibreAuditPage', () => {
       .mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
     vi.mocked(api.calibreAuditIdentifierAdd).mockResolvedValue({ attemptId: 9, outcome: 'applied', reauditError: 'reader offline' })
     renderPage()
-    fireEvent.click(await screen.findByRole('button', { name: 'Preview identifier additions' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Review proposed identifier' }))
     fireEvent.click(await screen.findByRole('radio', { name: /openlibrary.*OL12W/i }))
     fireEvent.click(screen.getByRole('checkbox', { name: /I reviewed.*add only/i }))
     fireEvent.click(screen.getByRole('button', { name: 'Add selected identifier to Calibre/CWA' }))
@@ -255,9 +264,9 @@ describe('CalibreAuditPage', () => {
     renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'Identifier write attempts' }))
     expect(await screen.findByText('No identifier write attempts recorded for this finding.')).toBeInTheDocument()
-    const preview = await screen.findByRole('button', { name: 'Preview identifier additions' })
+    const preview = await screen.findByRole('button', { name: 'Review proposed identifier' })
     fireEvent.click(preview)
-    expect(await screen.findByText(/No eligible missing work-level identifier additions/)).toBeInTheDocument()
+    expect(await screen.findByText(/Bindery cannot safely suggest an identifier/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Add selected identifier to Calibre/CWA' })).not.toBeInTheDocument()
     fireEvent.click(preview)
     fireEvent.click(await screen.findByRole('radio', { name: /openlibrary.*OL12W/i }))
@@ -275,7 +284,10 @@ describe('CalibreAuditPage', () => {
     expect(await screen.findByText('Owned title')).toBeInTheDocument()
     expect(screen.getAllByText('Provider title')).toHaveLength(2)
     expect(screen.getByRole('link', { name: 'OL1W ↗' })).toHaveAttribute('href', 'https://openlibrary.org/works/OL1W')
-    expect(screen.getByText(/Editions may differ/)).toBeInTheDocument()
+    expect(screen.getByText(/Calibre's title differs/)).toBeInTheDocument()
+    expect(screen.getByText(/Bindery is confident this is the same book/)).toBeInTheDocument()
+    expect(screen.getByText(/Edition match needs review/)).toBeInTheDocument()
+    expect(screen.getByText(/The owned title differs from the stored external work/)).not.toBeVisible()
     expect(screen.getByText('Current comparison · ambiguous')).toBeInTheDocument()
     expect(screen.getAllByText('Ambiguous evidence')).toHaveLength(2)
     expect(screen.queryByRole('link', { name: /Open in CWA/ })).not.toBeInTheDocument()
@@ -349,8 +361,8 @@ describe('CalibreAuditPage', () => {
     renderPage()
     expect(await screen.findByText(/historical values/)).toBeInTheDocument()
     expect(screen.getByText('Historical only · not a current mismatch')).toBeInTheDocument()
-    expect(screen.getByText('Previously recorded Calibre/CWA value')).toBeInTheDocument()
-    expect(screen.queryByText(/Why this was flagged/)).not.toBeInTheDocument()
+    expect(screen.getByText('Previously stored in Calibre')).toBeInTheDocument()
+    expect(screen.queryByText(/Technical details/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Ignore this comparison' })).not.toBeInTheDocument()
     expect(await screen.findByRole('link', { name: /Open in CWA/ })).toHaveAttribute('href', 'https://cwa.example.org/root/book/17')
   })
@@ -367,39 +379,66 @@ describe('CalibreAuditPage', () => {
   })
 
   it('treats ASIN as edition-oriented review evidence, not a confirmed owned edition', async () => {
+    vi.mocked(api.getSetting).mockImplementation(async key => ({ key, value: key === 'calibre.identifier_write_enabled' ? 'true' : '' }))
     vi.mocked(api.calibreAudit).mockResolvedValue({ items: [{ ...finding, field: 'identifiers', evidenceKey: 'asin',
       findingType: 'identifier_missing', assessment: 'ambiguous' }], total: 1, limit: 50, offset: 0 })
     renderPage()
-    expect(await screen.findByText('Edition-oriented identifier evidence (not an edition match)')).toBeInTheDocument()
-    expect(screen.getByText(/no exact owned edition/)).toBeInTheDocument()
-    expect(api.calibreAuditIdentity).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: 'Show work and edition evidence' }))
-    expect(await screen.findByText(/Provider work evidence: canonical. Edition evidence: ambiguous/)).toBeInTheDocument()
-    expect(screen.getByText('Several editions share the claimed ISBN.')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'OL4M ↗' }).closest('li')).toHaveTextContent('openlibrary: OL4M ↗')
-    expect(screen.getByRole('link', { name: 'OL5M ↗' }).closest('li')).toHaveTextContent('openlibrary: OL5M ↗')
+    expect(await screen.findByText('Possible edition identifier (not a confirmed edition)')).toBeInTheDocument()
+    expect(screen.getByText(/This identifier describes an edition, not just a book/)).toBeInTheDocument()
+    expect(await screen.findByText('Edition match needs review')).toBeInTheDocument()
+    expect(screen.getByText(/Bindery cannot safely choose an edition/)).toBeInTheDocument()
+    expect(screen.getByText(/cannot add or replace edition identifiers/)).toBeInTheDocument()
+    expect(screen.getByText(/Multiple canonical-work editions exist/)).not.toBeVisible()
+    const candidates = screen.getByText('Editions the provider returned').parentElement!
+    expect(within(candidates).getByRole('link', { name: 'OL4M ↗' }).closest('li')).toHaveTextContent('OpenLibrary · OL4M ↗')
+    expect(within(candidates).getByRole('link', { name: 'OL5M ↗' }).closest('li')).toHaveTextContent('OpenLibrary · OL5M ↗')
     expect(api.calibreAuditIdentity).toHaveBeenCalledWith(5)
   })
 
-  it('links typed CWA claims separately from edition-candidate explanations without changing confidence or actions', async () => {
+  it('links structured candidate claims in edition details without treating diagnostic text as a source', async () => {
     vi.mocked(api.getSetting).mockImplementation(async key => ({ key, value: key === 'calibre.identifier_write_enabled' ? 'true' : '' }))
     vi.mocked(api.calibreAuditIdentity).mockResolvedValue({ bookId: 5, calibreId: 17, rootKey: 'openlibrary:OL1W', evidence: [
       { status: 'root', workConfidence: 'canonical', editionConfidence: 'unresolved' },
-    ], edition: { confidence: 'ambiguous', reason: 'Several editions share the claimed ISBN.', candidates: [
-      { provider: 'openlibrary', editionId: 'OL4M', reasons: ['CWA claims (one correlated source)', 'pre-write-back file ISBN matches this edition'], claims: [
-        { type: 'openlibrary_edition', value: 'OL4M' }, { type: 'isbn', value: '9780306406157' },
-      ] },
-    ] } })
+    ], edition: { confidence: 'ambiguous', reasonCode: 'multiple_editions',
+      reason: 'Multiple canonical-work editions exist, but no independent or unique edition identifier selects one.', candidates: [
+        { provider: 'openlibrary', editionId: 'OL4M', reasons: ['CWA claims (one correlated source)', 'pre-write-back file ISBN matches this edition'], claims: [
+          { type: 'openlibrary_edition', value: 'OL4M' }, { type: 'isbn', value: '9780306406157' },
+          { type: 'isbn', value: '9780306406158' }, { type: 'unknown', value: '12345' },
+        ] },
+      ] } })
     renderPage()
-    fireEvent.click(await screen.findByRole('button', { name: 'Show work and edition evidence' }))
-    const isbn = await screen.findByRole('link', { name: '9780306406157 ↗' })
+    expect(await screen.findByText('Edition match needs review')).toBeInTheDocument()
+    expect(screen.getByText(/Bindery cannot safely choose an edition/)).toBeInTheDocument()
+    expect(within(screen.getByText('Editions the provider returned').parentElement!).getByRole('link', { name: 'OL4M ↗' })).toHaveAttribute('href', 'https://openlibrary.org/books/OL4M')
+    expect(screen.getByText(/CWA claims \(one correlated source\)/)).not.toBeVisible()
+    fireEvent.click(screen.getByText('Edition evidence details'))
+    const details = screen.getByText('Edition evidence details').closest('details')!
+    const isbn = within(details).getByRole('link', { name: '9780306406157 ↗' })
     expect(isbn).toHaveAttribute('href', 'https://openlibrary.org/isbn/9780306406157')
     expect(isbn).toHaveAttribute('target', '_blank')
     expect(isbn).toHaveAttribute('rel', 'noopener noreferrer')
-    expect(screen.getAllByRole('link', { name: 'OL4M ↗' })).toHaveLength(2)
-    expect(isbn.closest('li')).toHaveTextContent('CWA claims (one correlated source); pre-write-back file ISBN matches this edition · openlibrary_edition:OL4M ↗, isbn:9780306406157 ↗')
-    expect(screen.getByText(/Edition evidence: ambiguous/)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Preview identifier additions' })).not.toBeInTheDocument()
+    expect(within(details).getAllByRole('link', { name: 'OL4M ↗' })).toHaveLength(2)
+    expect(isbn.closest('p')).toHaveTextContent('openlibrary_edition: OL4M ↗, isbn: 9780306406157 ↗')
+    expect(within(details).queryByRole('link', { name: '9780306406158 ↗' })).not.toBeInTheDocument()
+    expect(within(details).queryByRole('link', { name: '12345 ↗' })).not.toBeInTheDocument()
+    expect(details).toHaveTextContent('isbn: 9780306406158, unknown: 12345')
+    expect(details).toHaveTextContent('CWA claims (one correlated source); pre-write-back file ISBN matches this edition')
+    expect(screen.queryByRole('button', { name: 'Review proposed identifier' })).not.toBeInTheDocument()
+  })
+
+  it('does not imply uncertainty when an exact edition accompanies an edition-scoped blocked finding', async () => {
+    vi.mocked(api.getSetting).mockImplementation(async key => ({ key, value: key === 'calibre.identifier_write_enabled' ? 'true' : '' }))
+    vi.mocked(api.calibreAudit).mockResolvedValue({ items: [{ ...finding, field: 'identifiers', evidenceKey: 'asin',
+      findingType: 'identifier_missing', assessment: 'ambiguous' }], total: 1, limit: 50, offset: 0 })
+    vi.mocked(api.calibreAuditIdentity).mockResolvedValue({ bookId: 5, calibreId: 17, rootKey: 'openlibrary:OL1W', evidence: [],
+      edition: { confidence: 'exact', reasonCode: 'independent_file_isbn', editionId: 'OL40M',
+        reason: 'A complete pre-write-back artifact ISBN uniquely matches a canonical-work ebook edition.', candidates: [] } })
+    renderPage()
+    expect(await screen.findByText(/Exact edition identified/)).toBeInTheDocument()
+    expect(screen.getByText(/This identifier describes an edition, not just a book/)).toBeInTheDocument()
+    expect(screen.getByText(/cannot add or replace edition identifiers, even when an edition has been identified/)).toBeInTheDocument()
+    expect(screen.queryByText(/More than one edition may fit this book/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Review proposed identifier' })).not.toBeInTheDocument()
   })
 
   it('shows the selected owned edition without calling a candidate confirmed by evidence status alone', async () => {
@@ -407,11 +446,12 @@ describe('CalibreAuditPage', () => {
       { status: 'root', workConfidence: 'canonical', editionConfidence: 'unresolved' },
       { status: 'root', workConfidence: 'exact', editionConfidence: 'unresolved', editionId: 'OL4M' },
     ], edition: { confidence: 'high', editionId: 'OL4M', provider: 'openlibrary',
-      reason: 'A unique owned-book ISBN matches the edition.', candidates: [{ provider: 'openlibrary', editionId: 'OL4M', reasons: [] }] } })
+      reason: 'A CWA identifier uniquely matches a canonical-work ebook edition; correlated CWA fields are one claim, not independent corroboration.', candidates: [{ provider: 'openlibrary', editionId: 'OL4M', reasons: [] }] } })
     renderPage()
-    fireEvent.click(await screen.findByRole('button', { name: 'Show work and edition evidence' }))
-    expect((await screen.findAllByRole('link', { name: 'OL4M ↗' }))[0].closest('p')).toHaveTextContent('Edition evidence: high (OL4M ↗)')
-    expect(screen.getByText('A unique owned-book ISBN matches the edition.')).toBeInTheDocument()
+    expect(await screen.findByText(/This edition is very likely/)).toBeInTheDocument()
+    expect(screen.getByText(/evidence points to this edition/)).toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: 'OL4M ↗' }).find(link => !link.closest('details'))).toHaveAttribute('href', 'https://openlibrary.org/books/OL4M')
+    expect(await screen.findByText(/A CWA identifier uniquely matches/)).not.toBeVisible()
     expect(screen.queryByText('A candidate edition is not a confirmed match to the owned file.')).not.toBeInTheDocument()
   })
 
@@ -453,7 +493,7 @@ describe('CalibreAuditPage', () => {
     expect(screen.getByText('9780306406158')).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: /12345|9780306406158/ })).not.toBeInTheDocument()
     expect(screen.getByText('Current comparison · ambiguous')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Preview identifier additions' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Review proposed identifier' })).not.toBeInTheDocument()
   })
 
   it('only links supported provider records and separates current review from historical filters', async () => {
@@ -465,7 +505,7 @@ describe('CalibreAuditPage', () => {
         { value: 'gb:vol_1', source: 'book_identifiers.foreign_id', provider: 'googlebooks', foreignId: 'gb:vol_1' },
       ] }], total: 1, limit: 50, offset: 0 })
     renderPage()
-    expect(await screen.findByText('Work/provider identifier')).toBeInTheDocument()
+    expect(await screen.findByText('Book identifier (not an edition)')).toBeInTheDocument()
     expect(screen.getByText('Current comparison · review')).toBeInTheDocument()
     expect(screen.getAllByRole('link', { name: 'hc:known-slug ↗' }).every(link => link.getAttribute('href') === 'https://hardcover.app/books/known-slug')).toBe(true)
     expect(screen.getAllByRole('link', { name: 'gb:vol_1 ↗' }).every(link => link.getAttribute('href') === 'https://books.google.com/books?id=vol_1')).toBe(true)
@@ -488,5 +528,206 @@ describe('CalibreAuditPage', () => {
     fireEvent.click(button)
     await waitFor(() => expect(screen.getAllByRole('alert').some(el => el.textContent?.includes('library unavailable'))).toBe(true))
     expect(screen.queryByRole('link', { name: /Open in CWA/ })).not.toBeInTheDocument()
+  })
+
+  it('explains an exact edition using independently attested ebook evidence', async () => {
+    const snapshot: CalibreIdentitySnapshot = {
+      bookId: 5, calibreId: 17, rootKey: 'openlibrary:OL1W', evidence: [],
+      artifacts: [{ lineage: 'pre_writeback', attestedOriginal: true, stale: false, historical: false,
+        outcome: 'scanned', identifiers: [{ status: 'matches_work', normalizedValue: '9781234567897' }] }],
+      edition: { confidence: 'exact', editionId: 'OL4M', provider: 'openlibrary',
+        reasonCode: 'independent_file_isbn',
+        reason: 'A complete pre-write-back artifact ISBN uniquely matches a canonical-work ebook edition.', candidates: [] },
+    }
+    vi.mocked(api.calibreAuditIdentity).mockResolvedValue(snapshot)
+    renderPage()
+    expect(await screen.findByText(/Exact edition identified/)).toHaveTextContent('OL4M')
+    expect(screen.getByText(/ISBN was found in the ebook before any known Calibre metadata write-back/)).toBeInTheDocument()
+    expect(screen.getByText(/pre-write-back artifact ISBN uniquely matches/)).not.toBeVisible()
+  })
+
+  it('explains a likely edition based on a Calibre identifier without treating it as independent', async () => {
+    vi.mocked(api.calibreAuditIdentity).mockResolvedValue({
+      bookId: 5, calibreId: 17, rootKey: 'openlibrary:OL1W', evidence: [],
+      claims: [{ identifierType: 'isbn', status: 'agrees' }],
+      edition: { confidence: 'high', editionId: 'OL4M', provider: 'openlibrary',
+        reasonCode: 'calibre_identifiers',
+        reason: 'A CWA identifier uniquely matches a canonical-work ebook edition.', candidates: [] },
+    })
+    renderPage()
+    expect(await screen.findByText(/This edition is very likely/)).toBeInTheDocument()
+    expect(screen.getByText(/Calibre currently stores an identifier that points to this edition/)).toBeInTheDocument()
+    expect(screen.getByText(/CWA identifier uniquely matches/)).not.toBeVisible()
+  })
+
+  it('does not count a possibly Calibre-derived ebook identifier as separate confirmation', async () => {
+    vi.mocked(api.calibreAuditIdentity).mockResolvedValue({
+      bookId: 5, calibreId: 17, rootKey: 'openlibrary:OL1W', evidence: [],
+      artifacts: [{ lineage: 'potentially_cwa_derived', attestedOriginal: false, stale: false, historical: false,
+        outcome: 'scanned', identifiers: [{ status: 'matches_work', normalizedValue: '9781234567897' }] }],
+      edition: { confidence: 'high', editionId: 'OL4M', provider: 'openlibrary', reasonCode: 'calibre_identifiers', artifactWarning: 'possibly_calibre_derived',
+        reason: 'A CWA identifier uniquely matches a canonical-work ebook edition; correlated CWA fields are one claim, not independent corroboration.', candidates: [] },
+    })
+    renderPage()
+    expect(await screen.findByText(/may have been written there by Calibre/)).toBeInTheDocument()
+    expect(screen.getByText(/This edition is very likely/)).toBeInTheDocument()
+    expect(screen.queryByText(/ISBN was found in the ebook before any known/)).not.toBeInTheDocument()
+  })
+
+  it('explains incomplete provider results without turning visible candidates into a definite match', async () => {
+    vi.mocked(api.calibreAuditIdentity).mockResolvedValue({
+      bookId: 5, calibreId: 17, rootKey: 'openlibrary:OL1W',
+      evidence: [{ status: 'root', workConfidence: 'exact', editionConfidence: 'candidate',
+        provider: 'openlibrary', editionId: 'OL4M', providerMetadata: { title: 'Provider edition title' } }],
+      lookups: [{ method: 'exact_editions', outcome: 'truncated', provider: 'openlibrary' }],
+      edition: { confidence: 'ambiguous', reasonCode: 'lookup_incomplete', reason: 'The canonical provider exact-editions lookup is incomplete.',
+        candidates: [{ provider: 'openlibrary', editionId: 'OL4M', reasons: ['CWA claims isbn (one correlated source)'] }] },
+    })
+    renderPage()
+    expect(await screen.findByText(/provider may have more editions than Bindery received/)).toBeInTheDocument()
+    expect(screen.getByText('Edition match needs review')).toBeInTheDocument()
+    expect(screen.queryByText(/More than one edition still fits/)).not.toBeInTheDocument()
+    expect(within(screen.getByText('Editions the provider returned').parentElement!).getByRole('link', { name: 'OL4M ↗' }).closest('li')).toHaveTextContent('Provider edition title · OL4M ↗')
+    expect(screen.getByText(/not confirmed matches to your ebook/)).toBeInTheDocument()
+    expect(screen.getByText(/exact-editions lookup is incomplete/)).not.toBeVisible()
+    expect(screen.getByText(/CWA claims isbn/)).not.toBeVisible()
+  })
+
+  it('distinguishes conflicting edition evidence from a merely unresolved edition', async () => {
+    vi.mocked(api.calibreAuditIdentity).mockResolvedValueOnce({
+      bookId: 5, calibreId: 17, rootKey: 'openlibrary:OL1W', evidence: [],
+      claims: [{ identifierType: 'isbn', status: 'conflicts' }],
+      edition: { confidence: 'ambiguous', reasonCode: 'conflicting_evidence', reason: 'Conflicting or multiple edition identifiers remain within the canonical work.', candidates: [] },
+    })
+    const first = renderPage()
+    expect(await screen.findByText(/edition information points to different possibilities or conflicts/)).toBeInTheDocument()
+    first.unmount()
+    vi.mocked(api.calibreAuditIdentity).mockResolvedValue({
+      bookId: 5, calibreId: 17, rootKey: 'openlibrary:OL1W', evidence: [],
+      edition: { confidence: 'unresolved', reason: 'No eligible edition of the canonical work has identifying evidence.', candidates: [] },
+    })
+    renderPage()
+    expect(await screen.findByText('Exact edition not identified')).toBeInTheDocument()
+    expect(screen.getByText(/does not have enough information to identify/)).toBeInTheDocument()
+    expect(screen.queryByText(/edition information points to different possibilities or conflicts/)).not.toBeInTheDocument()
+  })
+
+  it('keeps blocked identifier actions explanatory without offering a write', async () => {
+    vi.mocked(api.getSetting).mockImplementation(async key => ({ key, value: key === 'calibre.identifier_write_enabled' ? 'true' : '' }))
+    vi.mocked(api.calibreAudit).mockResolvedValue({ items: [{ ...missing, evidenceKey: 'isbn', assessment: 'ambiguous' }], total: 1, limit: 50, offset: 0 })
+    renderPage()
+    expect(await screen.findByText(/cannot add or replace edition identifiers/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Review proposed identifier' })).not.toBeInTheDocument()
+    expect(api.calibreAuditIdentifierProposals).not.toHaveBeenCalled()
+  })
+
+  it('keeps ignored comparisons reopenable and historical values separate from current matches', async () => {
+    vi.mocked(api.calibreAudit).mockResolvedValue({ items: [{ ...finding, state: 'unmatched', id: 3 },
+      { ...finding, state: 'ignored', id: 4 }], total: 2, limit: 50, offset: 0 })
+    renderPage()
+    expect(await screen.findByText('Previously stored in Calibre')).toBeInTheDocument()
+    expect(screen.getByText(/historical values, not a confirmed current mismatch/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reopen for review' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Review proposed identifier' })).not.toBeInTheDocument()
+    expect(api.calibreAuditIdentity).toHaveBeenCalledTimes(1)
+  })
+
+  it('loads an edition snapshot once for multiple findings about the same book', async () => {
+    vi.mocked(api.calibreAudit).mockResolvedValue({ items: [finding, { ...finding, id: 4,
+      findingType: 'language_difference', field: 'language', comparisonFingerprint: 'fp2' }], total: 2, limit: 50, offset: 0 })
+    renderPage()
+    expect(await screen.findAllByText('Edition match needs review')).toHaveLength(2)
+    expect(api.calibreAuditIdentity).toHaveBeenCalledTimes(1)
+  })
+
+  it('never infers edition basis from simultaneous raw lookup, claim, and file observations', async () => {
+    const evidence = [{ status: 'root', workConfidence: 'exact', editionConfidence: 'candidate' }]
+    const artifacts = [{ lineage: 'pre_writeback', attestedOriginal: true, stale: false, historical: false,
+      outcome: 'scanned', identifiers: [{ status: 'conflict', normalizedValue: '9781234567897' }] }]
+    const base = { bookId: 5, calibreId: 17, rootKey: 'openlibrary:OL1W', evidence, artifacts,
+      claims: [{ identifierType: 'isbn', status: 'agrees' }],
+      lookups: [{ method: 'exact_editions', outcome: 'truncated', provider: 'openlibrary' }] }
+    vi.mocked(api.calibreAuditIdentity).mockResolvedValueOnce({ ...base,
+      edition: { confidence: 'ambiguous', reasonCode: 'lookup_incomplete',
+        reason: 'The canonical provider exact-editions lookup is incomplete.', candidates: [] } })
+    const first = renderPage()
+    expect(await screen.findByText(/provider may have more editions than Bindery received/)).toBeInTheDocument()
+    expect(screen.queryByText(/edition information points to different possibilities or conflicts/)).not.toBeInTheDocument()
+    first.unmount()
+    vi.mocked(api.calibreAuditIdentity).mockResolvedValueOnce({ ...base,
+      edition: { confidence: 'ambiguous', reasonCode: 'conflicting_evidence',
+        reason: 'Conflicting or multiple edition identifiers remain within the canonical work.', candidates: [] } })
+    const second = renderPage()
+    expect(await screen.findByText(/edition information points to different possibilities or conflicts/)).toBeInTheDocument()
+    expect(screen.queryByText(/provider may have more editions than Bindery received/)).not.toBeInTheDocument()
+    second.unmount()
+    vi.mocked(api.calibreAuditIdentity).mockResolvedValue({ ...base,
+      edition: { confidence: 'ambiguous', reason: 'Opaque diagnostic without a category.', candidates: [] } })
+    renderPage()
+    expect(await screen.findByText(/Bindery cannot safely choose an edition/)).toBeInTheDocument()
+    expect(screen.queryByText(/provider may have more editions than Bindery received/)).not.toBeInTheDocument()
+  })
+
+  it('reloads edition evidence after a refresh that keeps the same finding fingerprint', async () => {
+    const first = { bookId: 5, calibreId: 17, rootKey: 'openlibrary:OL1W', evidence: [],
+      edition: { confidence: 'ambiguous' as const, reasonCode: 'multiple_editions',
+        reason: 'Multiple canonical-work editions exist, but no independent or unique edition identifier selects one.', candidates: [] } }
+    vi.mocked(api.calibreAuditIdentity).mockResolvedValueOnce(first).mockResolvedValueOnce({ ...first,
+      edition: { confidence: 'exact', reasonCode: 'independent_file_isbn', editionId: 'OL40M',
+        reason: 'A complete pre-write-back artifact ISBN uniquely matches a canonical-work ebook edition.', candidates: [] } })
+    renderPage()
+    expect(await screen.findByText('Edition match needs review')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Ignore this comparison' }))
+    await waitFor(() => expect(api.calibreAudit).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText(/Exact edition identified/)).toBeInTheDocument()
+    expect(api.calibreAuditIdentity).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not call a raw original-file observation the resolution basis without its category', async () => {
+    const base = { bookId: 5, calibreId: 17, rootKey: 'openlibrary:OL1W', evidence: [],
+      artifacts: [{ lineage: 'pre_writeback', attestedOriginal: true, stale: false, historical: false,
+        outcome: 'scanned', identifiers: [{ status: 'matches_work', normalizedValue: '9781234567897' }] }] }
+    vi.mocked(api.calibreAuditIdentity).mockResolvedValueOnce({ ...base,
+      edition: { confidence: 'exact', reason: 'A complete pre-write-back artifact ISBN uniquely matches a canonical-work ebook edition.', candidates: [] } })
+    const first = renderPage()
+    expect(await screen.findByText('Exact edition identified')).toBeInTheDocument()
+    expect(screen.getByText(/An edition was identified from evidence about this ebook/)).toBeInTheDocument()
+    expect(screen.queryByText(/ISBN was found in the ebook before any known/)).not.toBeInTheDocument()
+    first.unmount()
+    vi.mocked(api.calibreAuditIdentity).mockResolvedValue({ ...base,
+      edition: { confidence: 'high', reasonCode: 'calibre_identifiers',
+        reason: 'A CWA identifier uniquely matches a canonical-work ebook edition.', candidates: [] } })
+    renderPage()
+    expect(await screen.findByText(/Calibre currently stores an identifier that points to this edition/)).toBeInTheDocument()
+    expect(screen.queryByText(/ISBN was found in the ebook before any known/)).not.toBeInTheDocument()
+  })
+
+  it('does not call a Calibre claim the resolution basis when the backend chose historical file support', async () => {
+    vi.mocked(api.calibreAuditIdentity).mockResolvedValue({ bookId: 5, calibreId: 17,
+      rootKey: 'openlibrary:OL1W', evidence: [], claims: [{ identifierType: 'isbn', status: 'agrees' }],
+      edition: { confidence: 'high', reasonCode: 'historical_file_isbn',
+        reason: 'A historical pre-write-back observation and the current file agree on an ISBN; changed file bytes prevent an exact physical-edition assertion.', candidates: [] } })
+    renderPage()
+    expect(await screen.findByText(/previous scan and the current ebook share an ISBN/)).toBeInTheDocument()
+    expect(screen.queryByText(/Calibre currently stores an identifier that points to this edition/)).not.toBeInTheDocument()
+  })
+
+  it('uses the same identifier-add gate for blocked copy and visible action across overlapping reasons', async () => {
+    const scenarios: Array<{ name: string; enabled: boolean; item: CalibreAuditFinding; explanation: RegExp }> = [
+      { name: 'disabled even on a conflict', enabled: false, item: { ...missing, findingType: 'identifier_conflict', assessment: 'ambiguous', evidenceKey: 'isbn' }, explanation: /Adding identifiers is turned off/ },
+      { name: 'conflict with ambiguous edition scope', enabled: true, item: { ...missing, findingType: 'identifier_conflict', assessment: 'ambiguous', evidenceKey: 'isbn' }, explanation: /cannot replace a conflicting identifier/ },
+      { name: 'ambiguous work identifier', enabled: true, item: { ...missing, assessment: 'ambiguous' }, explanation: /does not support one safe identifier to add/ },
+      { name: 'edition identifier even with needs-review assessment', enabled: true, item: { ...missing, evidenceKey: 'isbn' }, explanation: /cannot add or replace edition identifiers/ },
+      { name: 'unsupported identifier', enabled: true, item: { ...missing, evidenceKey: 'unsupported' }, explanation: /cannot be added from this page/ },
+    ]
+    for (const scenario of scenarios) {
+      vi.mocked(api.getSetting).mockImplementation(async key => ({ key, value: key === 'calibre.identifier_write_enabled' && scenario.enabled ? 'true' : '' }))
+      vi.mocked(api.calibreAudit).mockResolvedValue({ items: [scenario.item], total: 1, limit: 50, offset: 0 })
+      const view = renderPage()
+      expect(await screen.findByText(scenario.explanation), scenario.name).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Review proposed identifier' }), scenario.name).not.toBeInTheDocument()
+      view.unmount()
+    }
+    expect(api.calibreAuditIdentifierProposals).not.toHaveBeenCalled()
   })
 })

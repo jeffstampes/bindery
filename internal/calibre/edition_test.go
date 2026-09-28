@@ -39,7 +39,7 @@ func TestResolveOwnedEditionExactArtifactAndIndependentWorkConfidence(t *testing
 	snapshot, cb := editionResolutionFixture()
 	snapshot.Artifacts = []models.CalibreArtifactScan{observedISBN("9780306406157")}
 	resolution := ResolveOwnedEdition(snapshot, cb)
-	if resolution.Confidence != "exact" || resolution.EditionID != "OL40M" || len(resolution.Candidates) != 2 || resolution.Reason == "" {
+	if resolution.Confidence != "exact" || resolution.ReasonCode != models.CalibreEditionReasonOriginalFile || resolution.EditionID != "OL40M" || len(resolution.Candidates) != 2 || resolution.Reason == "" {
 		t.Fatalf("unique pre-write-back artifact: %+v", resolution)
 	}
 	for _, e := range snapshot.Evidence {
@@ -78,7 +78,7 @@ func TestResolveOwnedEditionTruncatedProviderListPreservesCandidates(t *testing.
 		}
 	}
 	got := ResolveOwnedEdition(snapshot, cb)
-	if got.Confidence != "ambiguous" || got.EditionID != "" || len(got.Candidates) != 2 ||
+	if got.Confidence != "ambiguous" || got.ReasonCode != models.CalibreEditionReasonIncomplete || got.EditionID != "" || len(got.Candidates) != 2 ||
 		!strings.Contains(got.Reason, "incomplete") {
 		t.Fatalf("truncated exact-editions list asserted uniqueness: %+v", got)
 	}
@@ -292,7 +292,7 @@ func TestResolveOwnedEditionPublisherTieBreakAndCorrelatedConflict(t *testing.T)
 	snapshot.Evidence[2].ProviderMetadata["publisher"] = "Other Press"
 	cb.Identifiers["isbn"], cb.Publisher = "9780306406157", "Ace Books"
 	if got := ResolveOwnedEdition(snapshot, cb); got.Confidence != "high" || got.EditionID != "OL40M" ||
-		!strings.Contains(got.Reason, "publisher") {
+		got.ReasonCode != models.CalibreEditionReasonCalibreFields || !strings.Contains(got.Reason, "publisher") {
 		t.Fatalf("owned publisher did not disambiguate shared ISBN: %+v", got)
 	}
 	cb.Language = "fre"
@@ -345,7 +345,7 @@ func TestResolveOwnedEditionHistoricalPreWritebackLimitedSupport(t *testing.T) {
 	current.Historical, current.Lineage = false, "potentially_cwa_derived"
 	snapshot.ArtifactHistory = []models.CalibreArtifactScan{past}
 	snapshot.Artifacts = []models.CalibreArtifactScan{current}
-	if got := ResolveOwnedEdition(snapshot, cb); got.Confidence != "high" || got.EditionID != "OL40M" ||
+	if got := ResolveOwnedEdition(snapshot, cb); got.Confidence != "high" || got.ReasonCode != models.CalibreEditionReasonHistoricFile || got.EditionID != "OL40M" ||
 		!strings.Contains(got.Reason, "historical") {
 		t.Fatalf("pre-write-back observation lost its distinct limited provenance: %+v", got)
 	}
@@ -367,6 +367,45 @@ func TestResolveOwnedEditionRejectsCrossProviderCandidate(t *testing.T) {
 	if got := ResolveOwnedEdition(snapshot, cb); got.Confidence != "ambiguous" || got.EditionID != "" ||
 		len(got.Candidates) != 2 {
 		t.Fatalf("cross-provider/wrong-work candidate became owned edition: %+v", got)
+	}
+}
+
+// The category describes the resolver branch, not a second interpretation of
+// the snapshot's raw, potentially contradictory observations.
+func TestResolveOwnedEditionPresentationReason(t *testing.T) {
+	snapshot, cb := editionResolutionFixture()
+	snapshot.Artifacts = []models.CalibreArtifactScan{observedISBN("9780306406157")}
+	cb.Identifiers["isbn"] = "9780306406157"
+	if got := ResolveOwnedEdition(snapshot, cb); got.ReasonCode != "independent_file_isbn" || got.Confidence != "exact" {
+		t.Fatalf("independent file should establish exact edition: %+v", got)
+	}
+	for i := range snapshot.Lookups {
+		if snapshot.Lookups[i].Method == metadata.RawMethodExactEditions {
+			snapshot.Lookups[i].Outcome = models.CalibreIdentityLookupTruncated
+		}
+	}
+	snapshot.Artifacts = []models.CalibreArtifactScan{observedISBN("9780306406157", "9781861972712")}
+	if got := ResolveOwnedEdition(snapshot, cb); got.ReasonCode != "lookup_incomplete" || got.Confidence != "ambiguous" {
+		t.Fatalf("incomplete lookup wins before conflicting evidence: %+v", got)
+	}
+	for i := range snapshot.Lookups {
+		if snapshot.Lookups[i].Method == metadata.RawMethodExactEditions {
+			snapshot.Lookups[i].Outcome = models.CalibreIdentityLookupAnswered
+		}
+	}
+	if got := ResolveOwnedEdition(snapshot, cb); got.ReasonCode != "conflicting_evidence" || got.Confidence != "ambiguous" {
+		t.Fatalf("complete lookup with competing ISBNs: %+v", got)
+	}
+	scan := observedISBN("9780306406157")
+	scan.Lineage, scan.AttestedOriginal = "potentially_cwa_derived", false
+	snapshot.Artifacts = []models.CalibreArtifactScan{scan}
+	if got := ResolveOwnedEdition(snapshot, cb); got.ReasonCode != "calibre_identifiers" ||
+		got.Confidence != "high" || got.ArtifactWarning != "possibly_calibre_derived" {
+		t.Fatalf("CWA claim, with a non-independent file observation: %+v", got)
+	}
+	delete(cb.Identifiers, "isbn")
+	if got := ResolveOwnedEdition(snapshot, cb); got.ReasonCode != "multiple_editions" || got.Confidence != "ambiguous" {
+		t.Fatalf("non-independent observation selected an edition: %+v", got)
 	}
 }
 

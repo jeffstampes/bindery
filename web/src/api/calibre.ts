@@ -152,12 +152,31 @@ export interface CalibreIdentitySnapshot {
     workConfidence: string
     editionConfidence: string
     editionId?: string
+    provider?: string
+    method?: string
+    provenanceGroup?: string
+    key?: string
+    checkedAt?: string
+    providerMetadata?: { title?: string; ebook?: boolean }
+  }>
+  lookups?: Array<{ method: string; outcome: string; provider: string }>
+  claims?: Array<{ identifierType: string; status: string }>
+  artifacts?: Array<{
+    lineage: string
+    attestedOriginal: boolean
+    stale: boolean
+    historical: boolean
+    outcome: string
+    identifiers: Array<{ status: string; normalizedValue: string }>
   }>
   edition?: {
     confidence: 'exact' | 'high' | 'ambiguous' | 'unresolved'
     editionId?: string
     provider?: string
     reason: string
+    // Server-selected presentation category; missing on older snapshots.
+    reasonCode?: string
+    artifactWarning?: string
     candidates: Array<{ editionId: string; provider: string; reasons: string[]; claims?: Array<{ type: string; value: string }> }>
   }
 }
