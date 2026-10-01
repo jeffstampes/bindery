@@ -346,6 +346,11 @@ var settingDescriptors = []SettingDescriptor{
 		State:       SettingStateActive,
 	},
 	{
+		Key: SettingCalibreMetadataRefreshEnabled, Type: SettingTypeBool, Default: "false",
+		Description: "Independently opt in to per-book, human-approved Calibre metadata lookup and narrowly scoped title/publisher refresh. Requires authoritative mode and Calibre CLI tools; never changes ebook files.",
+		State:       SettingStateActive,
+	},
+	{
 		Key: "calibre.last_import_at", Type: SettingTypeString, Default: "",
 		Description: "RFC3339 timestamp of the last Calibre library import, written by the importer and shown on the Calibre settings tab.",
 		State:       SettingStateInternal,

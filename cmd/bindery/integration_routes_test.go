@@ -81,6 +81,15 @@ func (h *stubIntegrationHandler) IdentifierAdd(w http.ResponseWriter, _ *http.Re
 func (h *stubIntegrationHandler) IdentifierAttempts(w http.ResponseWriter, _ *http.Request) {
 	h.record("identifier-attempts", w)
 }
+func (h *stubIntegrationHandler) RefreshPreview(w http.ResponseWriter, _ *http.Request) {
+	h.record("refresh-preview", w)
+}
+func (h *stubIntegrationHandler) RefreshApply(w http.ResponseWriter, _ *http.Request) {
+	h.record("refresh-apply", w)
+}
+func (h *stubIntegrationHandler) RefreshAttempts(w http.ResponseWriter, _ *http.Request) {
+	h.record("refresh-attempts", w)
+}
 
 // newIntegrationRouter wires the three integration route helpers onto a fresh
 // router with one shared stub, mirroring how main.go mounts them.
@@ -123,6 +132,9 @@ func TestIntegrationRoutesRequireAdmin(t *testing.T) {
 		{"calibre identifier proposals", http.MethodGet, "/calibre/audit/1/identifier-proposals"},
 		{"calibre identifier add", http.MethodPost, "/calibre/audit/1/identifier-add"},
 		{"calibre identifier attempts", http.MethodGet, "/calibre/audit/1/identifier-attempts"},
+		{"calibre refresh preview", http.MethodPost, "/calibre/metadata-refresh/1/preview"},
+		{"calibre refresh apply", http.MethodPost, "/calibre/metadata-refresh/proposals/1/apply"},
+		{"calibre refresh attempts", http.MethodGet, "/calibre/metadata-refresh/1/attempts"},
 		{"calibre identity evidence", http.MethodGet, "/calibre/identity/1"},
 		{"calibre owned cover", http.MethodGet, "/calibre/identity/1/cover"},
 		{"calibre artifact scan", http.MethodPost, "/calibre/identity/1/scan"},
@@ -174,6 +186,9 @@ func TestIntegrationRoutesAllowAdmin(t *testing.T) {
 		{http.MethodGet, "/calibre/audit/1/identifier-proposals", "identifier-proposals"},
 		{http.MethodPost, "/calibre/audit/1/identifier-add", "identifier-add"},
 		{http.MethodGet, "/calibre/audit/1/identifier-attempts", "identifier-attempts"},
+		{http.MethodPost, "/calibre/metadata-refresh/1/preview", "refresh-preview"},
+		{http.MethodPost, "/calibre/metadata-refresh/proposals/1/apply", "refresh-apply"},
+		{http.MethodGet, "/calibre/metadata-refresh/1/attempts", "refresh-attempts"},
 		{http.MethodGet, "/calibre/identity/1", "identity"},
 		{http.MethodGet, "/calibre/identity/1/cover", "owned-cover"},
 		{http.MethodPost, "/calibre/identity/1/writeback", "artifact-writeback"},

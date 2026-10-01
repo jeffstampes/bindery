@@ -15,6 +15,7 @@ import {
 import { providerDisplayName } from '../util/metadataSource'
 import { apiURL } from '../api/core'
 import CalibreIdentifierLink from '../components/CalibreIdentifierLink'
+import CalibreMetadataRefresh from '../components/CalibreMetadataRefresh'
 import Pagination from '../components/Pagination'
 import { useServerPagination } from '../components/usePagination'
 
@@ -394,10 +395,12 @@ type BookFindingsProps = Omit<FindingProps, 'finding'> & {
   findings: CalibreAuditFinding[]
   cwaURL: string
   identityGeneration: number
+  metadataRefreshEnabled: boolean
+  onRefreshNotice: (message: string, failed: boolean) => void
   loadIdentity: (bookId: number) => Promise<CalibreIdentitySnapshot>
 }
 
-function BookFindings({ findings, cwaURL, identityGeneration, loadIdentity, ...controls }: BookFindingsProps) {
+function BookFindings({ findings, cwaURL, identityGeneration, metadataRefreshEnabled, onRefreshNotice, loadIdentity, ...controls }: BookFindingsProps) {
   const { t } = useTranslation()
   const book = findings[0]
   const historical = book.state === 'unmatched'
@@ -409,6 +412,7 @@ function BookFindings({ findings, cwaURL, identityGeneration, loadIdentity, ...c
       {target && <a href={target} target="_blank" rel="noopener noreferrer" className="inline-block text-sm text-emerald-700 dark:text-emerald-400 underline">{t('calibreAudit.openCWA')}</a>}
     </header>
     {!historical && <IdentityContext key={`${book.bookId}:${book.calibreId}:${identityGeneration}`} finding={book} loadIdentity={loadIdentity} />}
+    {!historical && <CalibreMetadataRefresh key={`${book.bookId}:${book.calibreId}`} bookId={book.bookId} calibreId={book.calibreId} enabled={metadataRefreshEnabled} onApplied={controls.onRefresh} onNotice={onRefreshNotice} />}
     <ul className="space-y-3">{findings.map(finding => <Finding key={finding.id} finding={finding} {...controls} />)}</ul>
   </li>
 }
@@ -444,6 +448,8 @@ export default function CalibreAuditPage() {
   const [identifierScope, setIdentifierScope] = useState('')
   const [cwaURL, setCwaURL] = useState('')
   const [identifierWriteEnabled, setIdentifierWriteEnabled] = useState(false)
+  const [metadataRefreshEnabled, setMetadataRefreshEnabled] = useState(false)
+  const [refreshNotice, setRefreshNotice] = useState<{ message: string; failed: boolean } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [actionError, setActionError] = useState('')
@@ -478,6 +484,14 @@ export default function CalibreAuditPage() {
     api.getSetting('calibre.identifier_write_enabled')
       .then(s => { if (active) setIdentifierWriteEnabled(s.value.toLowerCase() === 'true') })
       .catch(() => { if (active) setIdentifierWriteEnabled(false) })
+    return () => { active = false }
+  }, [revision])
+
+  useEffect(() => {
+    let active = true
+    api.getSetting('calibre.metadata_refresh_enabled')
+      .then(s => { if (active) setMetadataRefreshEnabled(s.value.toLowerCase() === 'true') })
+      .catch(() => { if (active) setMetadataRefreshEnabled(false) })
     return () => { active = false }
   }, [revision])
 
@@ -639,12 +653,13 @@ export default function CalibreAuditPage() {
     {actionError && <p role="alert" className="text-red-600 dark:text-red-400">{actionError}</p>}
     {identifierOutcome && <p role="status" aria-label={t('calibreAudit.addStatus')}>{identifierOutcome}</p>}
     {identifierError && <p role="alert" className="text-red-600 dark:text-red-400">{identifierError}</p>}
+    {refreshNotice && <p role={refreshNotice.failed ? 'alert' : 'status'} className={refreshNotice.failed ? 'text-red-600 dark:text-red-400' : 'text-emerald-700 dark:text-emerald-400'}>{refreshNotice.message}</p>}
     {statusError && <p role="alert" className="text-red-600 dark:text-red-400">{statusError}</p>}
     {status?.running && <p role="status">{alreadyRunning ? t('calibreAudit.alreadyRunning') : accepted ? t('calibreAudit.accepted') : t('calibreAudit.working')}</p>}
     {status?.error && <p role="alert" className="text-red-600 dark:text-red-400">{t('calibreAudit.actionError', { error: status.error })}</p>}
     {status?.result && !status.running && <p role="status">{t('calibreAudit.recheckResult', { compared: status.result.comparedBooks, findings: status.result.findings, updated: status.result.updated })}</p>}
     {!error && !loading && <p className="text-xs text-fg-muted">{t('calibreAudit.matchingCount', { count: total })}</p>}
-    {loading ? <p role="status">{t('common.loading')}</p> : error ? <p role="alert" className="text-red-600 dark:text-red-400">{error}</p> : items.length === 0 ? <p>{t('calibreAudit.empty')}</p> : <ul className="space-y-3">{groupFindings(items).map(group => <BookFindings key={group[0].state === 'unmatched' ? `historical:${group[0].id}` : `book:${group[0].bookId}:${group[0].calibreId}`} findings={group} cwaURL={cwaURL} busy={busy} identifierWriteEnabled={identifierWriteEnabled} revision={revision} identityGeneration={identityGeneration} loadIdentity={loadIdentity} onRefresh={refresh} onNotice={identifierNotice} onIgnore={ignore} onReopen={reopen} />)}</ul>}
+    {loading ? <p role="status">{t('common.loading')}</p> : error ? <p role="alert" className="text-red-600 dark:text-red-400">{error}</p> : items.length === 0 ? <p>{t('calibreAudit.empty')}</p> : <ul className="space-y-3">{groupFindings(items).map(group => <BookFindings key={group[0].state === 'unmatched' ? `historical:${group[0].id}` : `book:${group[0].bookId}:${group[0].calibreId}`} findings={group} cwaURL={cwaURL} busy={busy} identifierWriteEnabled={identifierWriteEnabled} revision={revision} identityGeneration={identityGeneration} metadataRefreshEnabled={metadataRefreshEnabled} onRefreshNotice={(message, failed) => setRefreshNotice({ message, failed })} loadIdentity={loadIdentity} onRefresh={refresh} onNotice={identifierNotice} onIgnore={ignore} onReopen={reopen} />)}</ul>}
     {!error && <Pagination {...paginationProps}
       onPageChange={next => { setLoading(true); paginationProps.onPageChange(next) }}
       onPageSizeChange={next => { setLoading(true); paginationProps.onPageSizeChange(next) }} />}

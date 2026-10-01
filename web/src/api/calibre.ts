@@ -252,6 +252,48 @@ export interface CalibreIdentifierAttempt {
   createdAt: string
 }
 
+export interface CalibreMetadataRefreshField {
+  name: string
+  current: string
+  fetched: string
+  status: 'change' | 'unchanged' | 'missing' | 'withheld'
+  reason?: string
+}
+
+export interface CalibreMetadataRefreshProposal {
+  id: number
+  bookId: number
+  calibreId: number
+  rootKey: string
+  evidenceKey: string
+  edition: CalibreIdentitySnapshot['edition']
+  lookupIsbn: string
+  currentIdentifiers: Record<string, string>
+  proposedIdentifiers: Record<string, string>
+  fields: CalibreMetadataRefreshField[]
+  fetchedOpfDigest?: string
+  sourceDigest: string
+  lookupLog?: string
+  status: 'ready' | 'no_result' | 'lookup_failed' | 'ineligible'
+  reason?: string
+  version: number
+  fingerprint: string
+}
+
+export interface CalibreMetadataRefreshAttempt {
+  id: number
+  proposalId: number
+  actorUserId: number
+  bookId: number
+  calibreId: number
+  action: string
+  outcome: 'pending' | 'applied' | 'rejected' | 'partial' | 'failed' | 'verification_failed'
+  error?: string
+  verification?: string
+  startedAt: string
+  finishedAt?: string
+}
+
 export interface CalibreAuditResult {
   totalCalibreBooks: number
   comparedBooks: number
@@ -329,6 +371,12 @@ export const calibreApi = {
     request<CalibreIdentifierAddResult>(`/calibre/audit/${id}/identifier-add`, { method: 'POST', body: JSON.stringify(body) }),
   calibreAuditIdentifierAttempts: (id: number) =>
     request<{ items: CalibreIdentifierAttempt[] }>(`/calibre/audit/${id}/identifier-attempts`),
+  calibreMetadataRefreshPreview: (bookId: number) =>
+    request<CalibreMetadataRefreshProposal>(`/calibre/metadata-refresh/${bookId}/preview`, { method: 'POST' }),
+  calibreMetadataRefreshApply: (id: number, fingerprint: string) =>
+    request<CalibreMetadataRefreshAttempt>(`/calibre/metadata-refresh/proposals/${id}/apply`, { method: 'POST', body: JSON.stringify({ fingerprint }) }),
+  calibreMetadataRefreshAttempts: (bookId: number) =>
+    request<{ items: CalibreMetadataRefreshAttempt[] }>(`/calibre/metadata-refresh/${bookId}/attempts`),
   calibreAuditIdentity: (bookId: number) => request<CalibreIdentitySnapshot>(`/calibre/identity/${bookId}`),
   calibreOwnedCoverURL: (bookId: number) => apiURL(`/calibre/identity/${bookId}/cover`),
   calibreAuditRecheck: () => request<CalibreAuditRecheckStatus>('/calibre/audit/recheck', { method: 'POST' }),

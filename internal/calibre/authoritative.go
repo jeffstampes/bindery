@@ -21,6 +21,8 @@ type AuthoritativeService struct {
 	audits             *db.CalibreAuditRepo
 	identity           *db.CalibreIdentityRepo
 	identifierAttempts *db.CalibreIdentifierAttemptRepo
+	metadataRefresh    *db.CalibreMetadataRefreshRepo
+	refreshCLI         metadataRefreshCLI
 	artifacts          *db.CalibreArtifactRepo
 	identitySource     identityDiscoverer
 	readerFactory      func(string) (AuthoritativeLibrary, error)

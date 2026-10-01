@@ -68,6 +68,8 @@ function CalibreSection({
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
   const [saveError, setSaveError] = useState<{ key: string; msg: string } | null>(null)
   const [authoritativeSaveError, setAuthoritativeSaveError] = useState<string | null>(null)
+  const [metadataRefreshSaveError, setMetadataRefreshSaveError] = useState<string | null>(null)
+  const [metadataRefreshSaving, setMetadataRefreshSaving] = useState(false)
   const [libraryPathSaveResult, libraryPathSave] = useSaveResult()
   const [binaryPathSaveResult, binaryPathSave] = useSaveResult()
   const [pluginUrlSaveResult, pluginUrlSave] = useSaveResult()
@@ -109,6 +111,7 @@ function CalibreSection({
   const libraryImportEnabled = (settings['calibre.library_import_enabled'] ?? 'false').toLowerCase() === 'true'
   const syncOnStartup = (settings['calibre.sync_on_startup'] ?? 'false').toLowerCase() === 'true'
   const authoritativeLibrary = (settings['calibre.authoritative_library_enabled'] ?? 'false').toLowerCase() === 'true'
+  const metadataRefreshEnabled = (settings['calibre.metadata_refresh_enabled'] ?? 'false').toLowerCase() === 'true'
   const lastImportAt = settings['calibre.last_import_at'] ?? ''
 
   // Hydrate progress on mount so navigating back mid-import still shows
@@ -578,6 +581,39 @@ function CalibreSection({
                   ? t('settings.calibre.authoritative.disable', 'Disable authoritative-library mode')
                   : t('settings.calibre.authoritative.enable', 'Enable authoritative-library mode')
               }
+            />
+          </div>
+          <div className="ml-4 pl-4 border-l border-slate-300 dark:border-zinc-700 flex items-center justify-between gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-800 dark:text-zinc-200">
+                {t('settings.calibre.metadataRefresh.label', 'Allow approved metadata refreshes')}
+              </label>
+              <p className="text-xs text-slate-600 dark:text-zinc-500 mt-0.5">
+                {t('settings.calibre.metadataRefresh.hint', 'Permit per-book, human-approved metadata lookups and approved updates in Calibre. No automatic or bulk metadata writes are performed.')}
+              </p>
+              {!authoritativeLibrary && <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                {t('settings.calibre.metadataRefresh.dependency', 'Enable authoritative-library mode first. Your metadata refresh preference is retained while the mode is off.')}
+              </p>}
+              {metadataRefreshSaveError && <p role="alert" className="text-xs text-red-600 dark:text-red-400 mt-1">{metadataRefreshSaveError}</p>}
+            </div>
+            <Toggle
+              checked={metadataRefreshEnabled}
+              disabled={!authoritativeLibrary || metadataRefreshSaving}
+              onChange={async () => {
+                if (!authoritativeLibrary || metadataRefreshSaving) return
+                const next = metadataRefreshEnabled ? 'false' : 'true'
+                setMetadataRefreshSaveError(null)
+                setMetadataRefreshSaving(true)
+                try {
+                  await api.setSetting('calibre.metadata_refresh_enabled', next)
+                  setSettings(s => ({ ...s, 'calibre.metadata_refresh_enabled': next }))
+                } catch (err) {
+                  setMetadataRefreshSaveError(err instanceof Error ? err.message : t('settings.calibre.metadataRefresh.saveFailed', 'Save failed'))
+                } finally {
+                  setMetadataRefreshSaving(false)
+                }
+              }}
+              title={t('settings.calibre.metadataRefresh.label', 'Allow approved metadata refreshes')}
             />
           </div>
         </div>
