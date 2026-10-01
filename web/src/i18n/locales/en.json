@@ -96,6 +96,35 @@
   "calibreAudit": {
     "title": "Calibre metadata review",
     "hint": "Compare what Calibre stores with claims from stored metadata records and metadata providers. Adding identifiers requires separate approval. If audit-tag updates are enabled, checks can update Calibre mismatch tags without per-finding approval.",
+    "refresh": {
+      "title": "Refresh stored metadata from Calibre's metadata providers",
+      "disabled": "Metadata refresh is off. Enable its separate capability in Settings before using this workflow.",
+      "scope": "Bindery establishes the book identity; Calibre looks up an ISBN from that evidence. The fetched result cannot change the identity. This first slice writes only explicitly shown title/publisher changes; identifiers, other metadata, and book-file contents are never changed.",
+      "preview": "Fetch and preview metadata",
+      "previewing": "Looking up metadata…",
+      "approve": "Approve these exact changes for this book",
+      "working": "Applying approved changes…",
+      "identity": "Identity basis: {{work}} · Calibre book #{{calibre}} · edition {{edition}} ({{confidence}})",
+      "lookup": "Lookup ISBN supplied to Calibre: {{isbn}}",
+      "digest": "Fetched metadata record digest: {{digest}}",
+      "sourceDigest": "Reviewed identity and source-evidence digest: {{digest}}",
+      "providerLog": "Metadata provider status: {{log}}",
+      "identifiers": "Identifiers currently stored",
+      "proposedIdentifiers": "Identifiers after approval (unchanged)",
+      "destructiveIdentifiers": "Identifier removals or replacements proposed: none. This workflow cannot make destructive identifier changes.",
+      "preserved": "{{type}}: {{value}} (retained; no identifier removal or replacement proposed)",
+      "fields": "Current stored metadata → fetched metadata",
+      "field": "{{name}}: {{current}} → {{fetched}} ({{status}})",
+      "missingValue": "not supplied",
+      "reason": "Reason: {{reason}}",
+      "status": "Lookup outcome: {{status}}. {{reason}}",
+      "history": "Refresh attempt history",
+      "attempt": "Attempt #{{id}} (proposal #{{proposal}}): {{outcome}}. {{detail}}",
+      "success": "The approved changes were verified against the Calibre book.",
+      "failure": "Refresh was not confirmed: {{error}}. Inspect the attempt and Calibre book before retrying.",
+      "error": "Cannot preview metadata: {{error}}",
+      "none": "No refresh attempts yet."
+    },
     "calibreId": "Calibre book #{{id}}",
     "matchedBook": "Bindery matched this book to",
     "bookMatch": {
@@ -940,6 +969,12 @@
         "staged": "Scheduled and manual reconciliation refresh ownership matches and audit findings without importing Calibre books into the Bindery catalogue.",
         "enable": "Enable authoritative-library mode",
         "disable": "Disable authoritative-library mode"
+      },
+      "metadataRefresh": {
+        "label": "Allow approved metadata refreshes",
+        "hint": "Permit per-book, human-approved metadata lookups and approved updates in Calibre. No automatic or bulk metadata writes are performed.",
+        "dependency": "Enable authoritative-library mode first. Your metadata refresh preference is retained while the mode is off.",
+        "saveFailed": "Save failed"
       },
       "runs": {
         "heading": "Recent imports",

@@ -501,7 +501,7 @@ func (h *SettingsHandler) validateSettingDependencies(ctx context.Context, key, 
 		if s, _ := h.settings.Get(ctx, SettingCalibreLibraryPath); s == nil || strings.TrimSpace(s.Value) == "" {
 			return fmt.Errorf("calibre.authoritative_library_enabled requires calibre.library_path — set the Calibre library path first")
 		}
-	case SettingCalibreAuditTagWriteEnabled, SettingCalibreIdentifierWriteEnabled:
+	case SettingCalibreAuditTagWriteEnabled, SettingCalibreIdentifierWriteEnabled, SettingCalibreMetadataRefreshEnabled:
 		if !strings.EqualFold(value, "true") {
 			return nil
 		}

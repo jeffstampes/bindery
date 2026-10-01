@@ -545,7 +545,8 @@ func main() {
 		WithEditions(editionRepo).WithAudit(calibreAuditRepo).
 		WithIdentityEvidence(calibreIdentityRepo, metaAgg).
 		WithArtifactEvidence(db.NewCalibreArtifactRepo(database)).
-		WithIdentifierAttempts(db.NewCalibreIdentifierAttemptRepo(database))
+		WithIdentifierAttempts(db.NewCalibreIdentifierAttemptRepo(database)).
+		WithMetadataRefresh(db.NewCalibreMetadataRefreshRepo(database))
 	calibreImporter.WithAuthoritativeService(authoritativeService)
 
 	if authoritativeService.IsEnabled(ctxBoot) {

@@ -42,6 +42,7 @@ const (
 	// Identifier writes are a separate, default-off opt-in from both the
 	// authoritative read path and the mismatch-tag projection.
 	SettingCalibreIdentifierWriteEnabled = "calibre.identifier_write_enabled"
+	SettingCalibreMetadataRefreshEnabled = "calibre.metadata_refresh_enabled"
 	SettingCalibreAuditTagWriteEnabled   = "calibre.audit_tag_write_enabled"
 	SettingCalibrePluginURL              = "calibre.plugin_url"
 	SettingCalibrePluginAPIKey           = "calibre.plugin_api_key"
