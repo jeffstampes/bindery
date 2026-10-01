@@ -110,12 +110,10 @@ func TestExactProviderEditionArtworkIsAdvisoryAndPersistsWithItsRecord(t *testin
 	cb := &CalibreBook{CalibreID: 1, Identifiers: map[string]string{}}
 	raw := identityTestDiscovery()
 	raw.Observations[1].Editions = nil
-	for _, edition := range []models.Edition{
+	raw.Observations[1].Editions = append(raw.Observations[1].Editions, []models.Edition{
 		{ForeignID: "OL40M", ISBN13: &first, Format: "EPUB", IsEbook: true, ImageURL: "https://covers.openlibrary.org/b/id/40-L.jpg"},
 		{ForeignID: "OL41M", ISBN13: &second, Format: "EPUB", IsEbook: true, ImageURL: "https://covers.openlibrary.org/b/id/41-L.jpg"},
-	} {
-		raw.Observations[1].Editions = append(raw.Observations[1].Editions, edition)
-	}
+	}...)
 	snapshot := buildIdentitySnapshot(book, cb, raw)
 	repo := db.NewCalibreIdentityRepo(f.database)
 	if err := repo.ReplaceBatch(ctx, []models.CalibreIdentitySnapshot{snapshot}); err != nil {

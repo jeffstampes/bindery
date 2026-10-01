@@ -78,28 +78,49 @@ function eligibleProposal(finding: CalibreAuditFinding, proposal: CalibreIdentif
     WORK_IDS.has(proposal.identifierType.toLowerCase())
 }
 
+function evidenceValueType(e: CalibreAuditEvidence, identifierType?: string): string {
+  return e.source.startsWith('calibre.identifiers.') ? e.source.slice('calibre.identifiers.'.length)
+    : ['books.foreign_id', 'book_identifiers.foreign_id', 'editions.foreign_id'].includes(e.source) ? 'foreign_id'
+    : identifierType ?? ''
+}
+
+function evidenceSource(e: CalibreAuditEvidence): string {
+  return e.source.startsWith('calibre.') ? 'calibre'
+    : e.source.startsWith('calibre_identity_evidence.') ? 'discovery'
+    : 'storedMetadata'
+}
+
 function Evidence({ values, identifierType }: { values: CalibreAuditEvidence[]; identifierType?: string }) {
   const { t } = useTranslation()
   if (!values?.length) return <span className="text-fg-muted">{t('calibreAudit.noValue')}</span>
-  return <ul className="space-y-1">{values.map((e, index) => {
-    const source = e.source.startsWith('calibre.') ? 'calibre'
-      : e.source.startsWith('editions.') ? 'edition'
-      : e.source.startsWith('calibre_identity_evidence.') ? 'discovery'
-      : e.source.startsWith('book_identifiers.') ? 'linkedIdentifier'
-      : e.source.startsWith('authors.') ? 'author'
-      : e.source.startsWith('series') ? 'series' : 'work'
-    const valueType = e.source.startsWith('calibre.identifiers.') ? e.source.slice('calibre.identifiers.'.length)
-      : ['books.foreign_id', 'book_identifiers.foreign_id', 'editions.foreign_id'].includes(e.source) ? 'foreign_id'
-      : identifierType ?? ''
+  // Group only literal, typed claims for display. The server keeps every
+  // observation and its fingerprint; equivalent ISBN forms remain visible.
+  const groups: Array<{ value: string; type: string; linkType: string; observations: CalibreAuditEvidence[] }> = []
+  for (const e of values) {
+    const linkType = evidenceValueType(e, identifierType)
+    const type = linkType === 'foreign_id' ? identifierType ?? linkType : linkType
+    const group = identifierType && e.value ? groups.find(g => g.type === type && g.value === e.value) : undefined
+    if (group) group.observations.push(e)
+    else groups.push({ value: e.value, type, linkType, observations: [e] })
+  }
+  return <ul className="space-y-1">{groups.map((group, index) => {
+    const e = group.observations[0]
+    const provenances = group.observations.filter((observation, position, all) =>
+      all.findIndex(other => evidenceSource(other) === evidenceSource(observation) &&
+        other.provider === observation.provider && other.foreignId === observation.foreignId) === position)
+    const isbnForm = identifierType === 'isbn' && group.value
+      ? group.value.replace(/[-\s]/g, '').length : 0
     return <li key={index} className="break-words">
-      <span className="font-medium">{e.value
-        ? <CalibreIdentifierLink type={valueType} value={e.value} provider={e.provider} />
-        : t('calibreAudit.noValue')}</span>
-      <span className="block text-xs text-fg-muted">
-        {t(`calibreAudit.provenance.${source}`)}
-        {e.provider && ` · ${providerDisplayName(e.provider)}`}
-        {e.foreignId && <> · <CalibreIdentifierLink type="foreign_id" value={e.foreignId} provider={e.provider} /></>}
+      <span className="font-medium">
+        {(isbnForm === 10 || isbnForm === 13) && <>{t(`calibreAudit.identifierNames.isbn${isbnForm}`)} · </>}
+        {group.value ? <CalibreIdentifierLink type={group.linkType} value={group.value} provider={e.provider} /> : t('calibreAudit.noValue')}
       </span>
+      {group.value && provenances.map((observation, position) => <span key={position} className="block text-xs text-fg-muted">
+        {t(`calibreAudit.provenance.${evidenceSource(observation)}`)}
+        {observation.provider && ` · ${providerDisplayName(observation.provider)}`}
+        {observation.foreignId && observation.foreignId !== group.value &&
+          <> · <CalibreIdentifierLink type="foreign_id" value={observation.foreignId} provider={observation.provider} /></>}
+      </span>)}
     </li>
   })}</ul>
 }
@@ -144,13 +165,19 @@ function IdentityContext({ finding, loadIdentity }: { finding: CalibreAuditFindi
   const resolution = snapshot?.edition
   const confidence = resolution?.confidence
   const explanation = editionExplanation(confidence, resolution?.reasonCode)
-  return <div className="space-y-2 text-sm">
-    <h4 className="font-semibold">{t('calibreAudit.editionHeading')}</h4>
+  // The selected CWA claim is book-level evidence, not an explanation of any
+  // one missing identifier comparison. Never infer the basis from raw evidence.
+  const selectedClaim = explanation === 'calibreClaim' ? resolution?.candidates?.find(candidate =>
+    candidate.editionId === resolution.editionId && candidate.provider === resolution.provider)?.claims?.[0] : undefined
+  return <section className="space-y-2 text-sm" aria-label={t('calibreAudit.editionHeading')}>
+    <h4 className="border-b border-slate-200 dark:border-zinc-700 pb-1 text-base font-semibold">{t('calibreAudit.editionHeading')}</h4>
     {loading ? <p className="text-fg-muted">{t('common.loading')}</p> : error || !snapshot
       ? <p className="text-fg-muted">{t('calibreAudit.identityUnavailable')}</p> : <>
         <p>{t('calibreAudit.editionStatus.' + (confidence || 'unresolved'))}{resolution?.editionId &&
           <> · {providerDisplayName(resolution.provider || '')} <CalibreIdentifierLink type="foreign_id" value={resolution.editionId} provider={resolution.provider} /></>}</p>
-        <p className="text-fg-muted">{t('calibreAudit.editionExplanation.' + explanation)}</p>
+        <p className="text-fg-muted">{t('calibreAudit.editionExplanation.' + (selectedClaim ? 'calibreClaimTyped' : explanation), {
+          sourceIdentifier: selectedClaim && t(`calibreAudit.identifierNames.${selectedClaim.type}`, { defaultValue: selectedClaim.type }),
+        })}</p>
         {resolution?.artifactWarning === 'possibly_calibre_derived' && <p className="text-fg-muted">{t('calibreAudit.possiblyDerived')}</p>}
         <div className="grid gap-3 sm:grid-cols-2">
         <div className="rounded border border-slate-300 dark:border-zinc-700 p-2" aria-label={t('calibreAudit.currentCopy')}>
@@ -200,7 +227,7 @@ function IdentityContext({ finding, loadIdentity }: { finding: CalibreAuditFindi
           {snapshot.artifacts?.map((scan, index) => <p key={index}>{t('calibreAudit.fileLineage')}: {scan.lineage}</p>)}
         </details>
       </>}
-  </div>
+  </section>
 }
 
 function IdentifierAdd({ finding, busy, onRefresh, onNotice }: { finding: CalibreAuditFinding; busy: boolean; onRefresh: () => void; onNotice: (outcome: string, error: string) => void }) {
@@ -303,54 +330,54 @@ function IdentifierAttemptHistory({ findingId, revision }: { findingId: number; 
   </div>
 }
 
-function Finding({ finding, cwaURL, busy, identifierWriteEnabled, revision, identityGeneration, loadIdentity, onRefresh, onNotice, onIgnore, onReopen }: {
+type FindingProps = {
   finding: CalibreAuditFinding
-  cwaURL: string
   busy: boolean
   identifierWriteEnabled: boolean
   revision: number
-  identityGeneration: number
-  loadIdentity: (bookId: number) => Promise<CalibreIdentitySnapshot>
   onRefresh: () => void
   onNotice: (outcome: string, error: string) => void
   onIgnore: (finding: CalibreAuditFinding) => void
   onReopen: (finding: CalibreAuditFinding) => void
-}) {
+}
+
+function Finding({ finding, busy, identifierWriteEnabled, revision, onRefresh, onNotice, onIgnore, onReopen }: FindingProps) {
   const { t } = useTranslation()
-  const target = cwaBookURL(cwaURL, finding.calibreId)
   const historical = finding.state === 'unmatched'
   const editionID = finding.field === 'identifiers' && EDITION_IDS.has(finding.evidenceKey)
   const workID = finding.field === 'identifiers' && !editionID
   const current = finding.state === 'unresolved'
   const priority = historical ? 'historical' : current && finding.assessment === 'needs_review' ? 'actionable' : current ? 'uncertain' : finding.state
   const addBlock = identifierAddBlock(finding, identifierWriteEnabled)
-  return <li className={`rounded-lg p-4 space-y-3 border ${historical ? 'border-dashed border-slate-400 dark:border-zinc-600 opacity-80' : 'border-slate-300 dark:border-zinc-700'}`}>
+  const identifierName = t(`calibreAudit.identifierNames.${finding.evidenceKey}`, { defaultValue: finding.evidenceKey })
+  const agreement = finding.field === 'identifiers' && finding.state === 'resolved'
+  return <li className="space-y-3 border-t border-slate-200 dark:border-zinc-700 pt-3">
     <div className="flex flex-wrap items-start justify-between gap-2">
-      <div>
-        <h3 className="font-semibold">{!historical && t('calibreAudit.matchedBook')} <Link className="text-emerald-700 dark:text-emerald-400 underline" to={`/book/${finding.bookId}`}>{finding.bookTitle || `#${finding.bookId}`}</Link></h3>
-        <p className="text-xs text-fg-muted">{t('calibreAudit.calibreId', { id: finding.calibreId })} · {historical ? t('calibreAudit.unmatchedHint') : t('calibreAudit.bookMatch.' + finding.matchConfidence, { defaultValue: t('calibreAudit.bookMatch.other') })}</p>
-      </div>
+      <h4 className="border-l-2 border-slate-300 dark:border-zinc-600 pl-3 text-sm font-semibold">
+        {finding.field === 'identifiers' ? t('calibreAudit.identifierComparison', { identifier: identifierName }) : t(`calibreAudit.types.${finding.findingType}`)}
+      </h4>
       <div className="flex flex-wrap gap-2 text-xs">
-        <span className="rounded bg-slate-200 dark:bg-zinc-800 px-2 py-1">{t(`calibreAudit.types.${finding.findingType}`)}</span>
+        <span className="rounded bg-slate-200 dark:bg-zinc-800 px-2 py-1">{t(agreement ? 'calibreAudit.agreement' : `calibreAudit.types.${finding.findingType}`)}</span>
         <span className={`rounded px-2 py-1 ${priority === 'actionable' ? 'bg-rose-100 text-rose-900 dark:bg-rose-950 dark:text-rose-200' : 'bg-slate-200 dark:bg-zinc-800'}`}>{t(`calibreAudit.priority.${priority}`)}</span>
         {editionID && <span className="rounded bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300 px-2 py-1">{t('calibreAudit.editionIdentifier')}</span>}
         {workID && <span className="rounded bg-sky-100 text-sky-900 dark:bg-sky-950 dark:text-sky-300 px-2 py-1">{t('calibreAudit.workIdentifier')}</span>}
-        {finding.assessment === 'ambiguous' && !historical && <span className="rounded bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300 px-2 py-1">{t('calibreAudit.ambiguous')}</span>}
+        {finding.assessment === 'ambiguous' && current && <span className="rounded bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300 px-2 py-1">{t('calibreAudit.ambiguous')}</span>}
       </div>
     </div>
     {editionID && current && finding.assessment === 'ambiguous' && <p className="text-xs text-amber-700 dark:text-amber-400">{t('calibreAudit.editionHint')}</p>}
     <div className="grid sm:grid-cols-2 gap-3 text-sm">
-      <div><h4 className="font-semibold mb-1">{historical ? t('calibreAudit.priorOwned') : t('calibreAudit.owned')}</h4><Evidence values={finding.calibreEvidence} identifierType={finding.field === 'identifiers' ? finding.evidenceKey : undefined} /></div>
-      <div><h4 className="font-semibold mb-1">{historical ? t('calibreAudit.priorExternal') : t('calibreAudit.external')}</h4><Evidence values={finding.binderyEvidence} identifierType={finding.field === 'identifiers' ? finding.evidenceKey : undefined} /></div>
+      <div><h5 className="font-medium mb-1">{historical ? t('calibreAudit.priorOwned') : t('calibreAudit.owned')}</h5><Evidence values={finding.calibreEvidence} identifierType={finding.field === 'identifiers' ? finding.evidenceKey : undefined} /></div>
+      <div><h5 className="font-medium mb-1">{historical ? t('calibreAudit.priorExternal') : t('calibreAudit.external')}</h5><Evidence values={finding.binderyEvidence} identifierType={finding.field === 'identifiers' ? finding.evidenceKey : undefined} /></div>
     </div>
-    {!historical && <IdentityContext key={`${finding.comparisonFingerprint}:${identityGeneration}`} finding={finding} loadIdentity={loadIdentity} />}
-    {!historical && <p className="text-sm text-fg-muted">{t('calibreAudit.findingExplanation.' + finding.findingType, { defaultValue: t('calibreAudit.findingExplanation.other') })}
-      {finding.assessment === 'ambiguous' && <> {t('calibreAudit.reviewCaveat')}</>}</p>}
+    {!historical && <p className="text-sm text-fg-muted">{t(agreement ? 'calibreAudit.findingExplanation.agreement' : 'calibreAudit.findingExplanation.' + finding.findingType, {
+      defaultValue: t('calibreAudit.findingExplanation.other'), identifier: identifierName,
+    })}
+      {current && finding.assessment === 'ambiguous' && <> {t('calibreAudit.reviewCaveat')}</>}</p>}
     {current && finding.field === 'identifiers' && addBlock &&
       <p className="text-sm text-fg-muted">{t('calibreAudit.blocked.' + addBlock)}</p>}
     {!addBlock && <IdentifierAdd key={finding.comparisonFingerprint} finding={finding} busy={busy} onRefresh={onRefresh} onNotice={onNotice} />}
     {!historical && <details className="text-xs text-fg-muted"><summary className="cursor-pointer">{t('calibreAudit.technicalDetails')}</summary>
-      <p>{t('calibreAudit.rawReason')}: {finding.reason}</p>
+      <p>{t('calibreAudit.rawReason')}: {finding.reason.replaceAll('stored provider record', 'stored metadata record')}</p>
       <p>{t('calibreAudit.matchDetails', { method: finding.matchMethod, confidence: finding.matchConfidence })}</p>
       <p>{t('calibreAudit.assessmentDetails', { assessment: finding.assessment, state: finding.state })}</p>
     </details>}
@@ -359,9 +386,45 @@ function Finding({ finding, cwaURL, busy, identifierWriteEnabled, revision, iden
     <div className="flex flex-wrap gap-3 text-sm">
       {current && <button disabled={busy} onClick={() => onIgnore(finding)} className="text-emerald-700 dark:text-emerald-400 underline disabled:opacity-50">{t('calibreAudit.ignore')}</button>}
       {finding.state === 'ignored' && <button disabled={busy} onClick={() => onReopen(finding)} className="text-emerald-700 dark:text-emerald-400 underline disabled:opacity-50">{t('calibreAudit.reopen')}</button>}
-      {target && <a href={target} target="_blank" rel="noopener noreferrer" className="text-emerald-700 dark:text-emerald-400 underline">{t('calibreAudit.openCWA')}</a>}
     </div>
   </li>
+}
+
+type BookFindingsProps = Omit<FindingProps, 'finding'> & {
+  findings: CalibreAuditFinding[]
+  cwaURL: string
+  identityGeneration: number
+  loadIdentity: (bookId: number) => Promise<CalibreIdentitySnapshot>
+}
+
+function BookFindings({ findings, cwaURL, identityGeneration, loadIdentity, ...controls }: BookFindingsProps) {
+  const { t } = useTranslation()
+  const book = findings[0]
+  const historical = book.state === 'unmatched'
+  const target = cwaBookURL(cwaURL, book.calibreId)
+  return <li className={`rounded-lg border p-4 space-y-4 ${historical ? 'border-dashed border-slate-400 dark:border-zinc-600 opacity-80' : 'border-slate-300 dark:border-zinc-700'}`}>
+    <header className="space-y-1">
+      <h3 className="text-lg font-semibold leading-snug">{!historical && <span className="block text-xs font-medium text-fg-muted">{t('calibreAudit.matchedBook')}</span>} <Link className="text-emerald-700 dark:text-emerald-400 underline" to={`/book/${book.bookId}`}>{book.bookTitle || `#${book.bookId}`}</Link></h3>
+      <p className="text-xs text-fg-muted">{t('calibreAudit.calibreId', { id: book.calibreId })} · {historical ? t('calibreAudit.unmatchedHint') : t('calibreAudit.bookMatch.' + book.matchConfidence, { defaultValue: t('calibreAudit.bookMatch.other') })}</p>
+      {target && <a href={target} target="_blank" rel="noopener noreferrer" className="inline-block text-sm text-emerald-700 dark:text-emerald-400 underline">{t('calibreAudit.openCWA')}</a>}
+    </header>
+    {!historical && <IdentityContext key={`${book.bookId}:${book.calibreId}:${identityGeneration}`} finding={book} loadIdentity={loadIdentity} />}
+    <ul className="space-y-3">{findings.map(finding => <Finding key={finding.id} finding={finding} {...controls} />)}</ul>
+  </li>
+}
+
+function groupFindings(items: CalibreAuditFinding[]): CalibreAuditFinding[][] {
+  const groups: CalibreAuditFinding[][] = []
+  const currentBooks = new Map<string, CalibreAuditFinding[]>()
+  for (const finding of items) {
+    // Historical records are per-finding snapshots, never current book state.
+    if (finding.state === 'unmatched') { groups.push([finding]); continue }
+    const key = `${finding.bookId}:${finding.calibreId}`
+    let group = currentBooks.get(key)
+    if (!group) { group = []; currentBooks.set(key, group); groups.push(group) }
+    group.push(finding)
+  }
+  return groups
 }
 
 export default function CalibreAuditPage() {
@@ -581,7 +644,7 @@ export default function CalibreAuditPage() {
     {status?.error && <p role="alert" className="text-red-600 dark:text-red-400">{t('calibreAudit.actionError', { error: status.error })}</p>}
     {status?.result && !status.running && <p role="status">{t('calibreAudit.recheckResult', { compared: status.result.comparedBooks, findings: status.result.findings, updated: status.result.updated })}</p>}
     {!error && !loading && <p className="text-xs text-fg-muted">{t('calibreAudit.matchingCount', { count: total })}</p>}
-    {loading ? <p role="status">{t('common.loading')}</p> : error ? <p role="alert" className="text-red-600 dark:text-red-400">{error}</p> : items.length === 0 ? <p>{t('calibreAudit.empty')}</p> : <ul className="space-y-3">{items.map(f => <Finding key={f.id} finding={f} cwaURL={cwaURL} busy={busy} identifierWriteEnabled={identifierWriteEnabled} revision={revision} identityGeneration={identityGeneration} loadIdentity={loadIdentity} onRefresh={refresh} onNotice={identifierNotice} onIgnore={ignore} onReopen={reopen} />)}</ul>}
+    {loading ? <p role="status">{t('common.loading')}</p> : error ? <p role="alert" className="text-red-600 dark:text-red-400">{error}</p> : items.length === 0 ? <p>{t('calibreAudit.empty')}</p> : <ul className="space-y-3">{groupFindings(items).map(group => <BookFindings key={group[0].state === 'unmatched' ? `historical:${group[0].id}` : `book:${group[0].bookId}:${group[0].calibreId}`} findings={group} cwaURL={cwaURL} busy={busy} identifierWriteEnabled={identifierWriteEnabled} revision={revision} identityGeneration={identityGeneration} loadIdentity={loadIdentity} onRefresh={refresh} onNotice={identifierNotice} onIgnore={ignore} onReopen={reopen} />)}</ul>}
     {!error && <Pagination {...paginationProps}
       onPageChange={next => { setLoading(true); paginationProps.onPageChange(next) }}
       onPageSizeChange={next => { setLoading(true); paginationProps.onPageSizeChange(next) }} />}
