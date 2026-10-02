@@ -28,9 +28,60 @@ import (
 const metadataRefreshSetting = "calibre.metadata_refresh_enabled"
 
 var (
-	ErrMetadataRefreshDisabled = errors.New("calibre metadata refresh requires its separate opt-in")
-	ErrMetadataRefreshStale    = errors.New("metadata refresh proposal is stale; preview again")
+	ErrMetadataRefreshDisabled   = errors.New("calibre metadata refresh requires its separate opt-in")
+	ErrMetadataRefreshStale      = errors.New("metadata refresh proposal is stale; preview again")
+	ErrMetadataRefreshIneligible = errors.New("metadata refresh ownership is ineligible")
 )
+
+// MetadataRefreshEligibility is a read-only hint about the persisted ownership
+// link. Preview and apply always revalidate live evidence before any lookup/write.
+type MetadataRefreshEligibility struct {
+	Status      string `json:"status"` // eligible, ineligible, stale
+	Reason      string `json:"reason,omitempty"`
+	MatchMethod string `json:"matchMethod,omitempty"`
+	Confidence  string `json:"confidence,omitempty"`
+}
+
+// MetadataRefreshOwnershipError preserves the policy reason for operators while
+// allowing API callers to distinguish ineligible ownership from stale state.
+type MetadataRefreshOwnershipError struct{ Eligibility MetadataRefreshEligibility }
+
+func (e *MetadataRefreshOwnershipError) Error() string { return e.Eligibility.Reason }
+func (e *MetadataRefreshOwnershipError) Unwrap() error { return ErrMetadataRefreshIneligible }
+
+func refreshOwnershipEligibility(ref *models.CalibreWorkCrossReference) MetadataRefreshEligibility {
+	if ref == nil || ref.Status != models.CalibreMatchStatusMatched || ref.CalibreID <= 0 || ref.CalibreFingerprint == "" {
+		return MetadataRefreshEligibility{Status: "stale", Reason: ErrMetadataRefreshStale.Error()}
+	}
+	result := MetadataRefreshEligibility{Status: "eligible", MatchMethod: ref.MatchMethod, Confidence: ref.Confidence}
+	if ref.Confidence != models.CalibreMatchConfidenceExact && ref.Confidence != models.CalibreMatchConfidenceHigh {
+		result.Status = "ineligible"
+		result.Reason = "Metadata refresh requires an identifier-confirmed ownership match. "
+		if ref.MatchMethod == "fallback_title_author" {
+			result.Reason += "This book is currently matched by title and author."
+		} else {
+			result.Reason += fmt.Sprintf("This book is currently matched by %s (%s confidence).", ref.MatchMethod, ref.Confidence)
+		}
+	}
+	return result
+}
+
+// MetadataRefreshEligibility reports the current persisted ownership policy
+// without fetching metadata. It is advisory; the preview/apply gates remain authoritative.
+func (s *AuthoritativeService) MetadataRefreshEligibility(ctx context.Context, bookID int64) (MetadataRefreshEligibility, error) {
+	allowed, err := s.metadataRefreshEnabled(ctx)
+	if err != nil {
+		return MetadataRefreshEligibility{}, err
+	}
+	if !allowed {
+		return MetadataRefreshEligibility{}, ErrMetadataRefreshDisabled
+	}
+	ref, err := s.crossRef.GetByBookID(ctx, bookID)
+	if err != nil {
+		return MetadataRefreshEligibility{}, err
+	}
+	return refreshOwnershipEligibility(ref), nil
+}
 
 // MetadataRefreshField describes one current/fetched value and its eligibility.
 // This first slice deliberately writes only title and publisher. Other fields
@@ -195,9 +246,12 @@ func (s *AuthoritativeService) refreshState(ctx context.Context, bookID int64) (
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if ref == nil || ref.Status != models.CalibreMatchStatusMatched || ref.CalibreID <= 0 || ref.CalibreFingerprint == "" ||
-		(ref.Confidence != models.CalibreMatchConfidenceExact && ref.Confidence != models.CalibreMatchConfidenceHigh) {
+	eligibility := refreshOwnershipEligibility(ref)
+	switch eligibility.Status {
+	case "stale":
 		return nil, nil, nil, ErrMetadataRefreshStale
+	case "ineligible":
+		return nil, nil, nil, &MetadataRefreshOwnershipError{Eligibility: eligibility}
 	}
 	book, err := s.books.GetByID(ctx, bookID)
 	if err != nil {
@@ -232,19 +286,29 @@ func (s *AuthoritativeService) refreshState(ctx context.Context, bookID int64) (
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	// The persisted exact/high link authorizes the workflow; also confirm it
+	// still matches under the ownership matcher. The stripped audit match is a
+	// separate, anti-circular check of the target, not a write-confidence gate.
+	current, err := MatchWork(ctx, book, reader)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if current.Status != models.CalibreMatchStatusMatched || current.CalibreID != cb.CalibreID ||
+		refreshOwnershipEligibility(current.ToCrossReference()).Status != "eligible" {
+		return nil, nil, nil, ErrMetadataRefreshStale
+	}
 	match, err := MatchWork(ctx, auditMatchEvidence(book), reader)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	if match.Status != models.CalibreMatchStatusMatched || match.CalibreID != cb.CalibreID ||
-		(match.Confidence != models.CalibreMatchConfidenceExact && match.Confidence != models.CalibreMatchConfidenceHigh) ||
 		CalculateFingerprint(cb) != ref.CalibreFingerprint {
 		return nil, nil, nil, ErrMetadataRefreshStale
 	}
 	root := ""
 	for _, e := range snapshot.Evidence {
 		if e.Status == models.CalibreIdentityRoot && e.Method == metadata.RawMethodExactBook &&
-			e.CanonicalIdentity == snapshot.RootKey && e.Provider == strings.ToLower(book.MetadataProvider) &&
+			e.CanonicalIdentity == snapshot.RootKey && e.Provider == identityCanonicalProvider(book.MetadataProvider) &&
 			e.ForeignID == book.ForeignID && e.Seed == book.ForeignID && e.EditionID == "" {
 			root = e.Key
 			break

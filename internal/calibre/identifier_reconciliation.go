@@ -143,7 +143,7 @@ func (s *AuthoritativeService) identifierProposals(ctx context.Context, findingI
 	rootFound := false
 	for _, evidence := range snapshot.Evidence {
 		if evidence.Status == models.CalibreIdentityRoot && evidence.Method == metadata.RawMethodExactBook &&
-			evidence.Provider == strings.ToLower(book.MetadataProvider) && evidence.ForeignID == book.ForeignID &&
+			evidence.Provider == identityCanonicalProvider(book.MetadataProvider) && evidence.ForeignID == book.ForeignID &&
 			evidence.Seed == book.ForeignID && evidence.EditionID == "" && evidence.CanonicalIdentity == snapshot.RootKey {
 			rootFound = true
 			for _, isbn := range evidence.NormalizedIdentifiers["isbn"] {
@@ -161,7 +161,7 @@ func (s *AuthoritativeService) identifierProposals(ctx context.Context, findingI
 			continue
 		}
 		validRoot := evidence.Status == models.CalibreIdentityRoot && evidence.WorkConfidence == "exact" &&
-			evidence.Method == metadata.RawMethodExactBook && evidence.Provider == strings.ToLower(book.MetadataProvider) &&
+			evidence.Method == metadata.RawMethodExactBook && evidence.Provider == identityCanonicalProvider(book.MetadataProvider) &&
 			evidence.ForeignID == book.ForeignID && evidence.Seed == book.ForeignID
 		validCorroboration := evidence.Status == models.CalibreIdentityCorroborated && evidence.WorkConfidence == "high" &&
 			evidence.Method == metadata.RawMethodISBN && rootISBNs[evidence.Seed]

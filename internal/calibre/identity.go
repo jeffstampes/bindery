@@ -243,13 +243,7 @@ launch:
 			go func() {
 				defer workers.Done()
 				defer func() { <-parallel }()
-				provider := strings.ToLower(strings.TrimSpace(job.book.MetadataProvider))
-				if provider == "ol" {
-					provider = "openlibrary"
-				}
-				if provider == "google" {
-					provider = "googlebooks"
-				}
+				provider := identityCanonicalProvider(job.book.MetadataProvider)
 				raw := s.identitySource.DiscoverRawBookEvidence(refreshCtx, provider, job.book.ForeignID)
 				snapshot := buildIdentitySnapshot(job.book, job.cb, raw)
 				s.diagnoseIdentityClaims(refreshCtx, job.book, &snapshot)
@@ -337,6 +331,18 @@ func identityEligible(ref models.CalibreWorkCrossReference, book *models.Book, c
 		ref.Status == models.CalibreMatchStatusMatched && ref.CalibreID > 0 &&
 		(ref.Confidence == models.CalibreMatchConfidenceExact || ref.Confidence == models.CalibreMatchConfidenceHigh ||
 			ref.Confidence == models.CalibreMatchConfidenceMedium)
+}
+
+func identityCanonicalProvider(raw string) string {
+	provider := strings.ToLower(strings.TrimSpace(raw))
+	switch provider {
+	case "ol":
+		return "openlibrary"
+	case "google":
+		return "googlebooks"
+	default:
+		return provider
+	}
 }
 
 func identityRootKey(book *models.Book) string {

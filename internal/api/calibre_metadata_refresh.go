@@ -22,6 +22,36 @@ func refreshBookID(r *http.Request) (int64, error) {
 	return id, nil
 }
 
+// RefreshEligibility exposes only the persisted ownership policy for the UI.
+// It never fetches metadata and cannot authorize a preview or apply.
+func (h *CalibreAuditHandler) RefreshEligibility(w http.ResponseWriter, r *http.Request) {
+	if !h.available(w, r) {
+		return
+	}
+	id, err := refreshBookID(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	service, ok := h.service.(interface {
+		MetadataRefreshEligibility(context.Context, int64) (calibre.MetadataRefreshEligibility, error)
+	})
+	if !ok {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "metadata refresh unavailable"})
+		return
+	}
+	eligibility, err := service.MetadataRefreshEligibility(r.Context(), id)
+	if errors.Is(err, calibre.ErrMetadataRefreshDisabled) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		writeServerError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, eligibility)
+}
+
 // RefreshPreview starts one frozen lookup for the matched book. It does not
 // apply fetched OPF content and is independently gated by the refresh setting.
 func (h *CalibreAuditHandler) RefreshPreview(w http.ResponseWriter, r *http.Request) {
@@ -45,8 +75,12 @@ func (h *CalibreAuditHandler) RefreshPreview(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
 		return
 	}
+	if errors.Is(err, calibre.ErrMetadataRefreshIneligible) {
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "ownership_ineligible", "error": err.Error()})
+		return
+	}
 	if errors.Is(err, calibre.ErrMetadataRefreshStale) {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "stale", "error": err.Error()})
 		return
 	}
 	if err != nil {

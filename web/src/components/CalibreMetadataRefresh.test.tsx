@@ -1,13 +1,13 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
-import { api, type CalibreMetadataRefreshProposal } from '../api/client'
+import { api, ApiError, type CalibreMetadataRefreshProposal } from '../api/client'
 import CalibreMetadataRefresh from './CalibreMetadataRefresh'
 import en from '../i18n/locales/en.json'
 
 vi.mock('../api/client', async importOriginal => {
   const original = await importOriginal<typeof import('../api/client')>()
   return { ...original, api: { ...original.api,
-    calibreMetadataRefreshPreview: vi.fn(), calibreMetadataRefreshApply: vi.fn(), calibreMetadataRefreshAttempts: vi.fn(),
+    calibreMetadataRefreshEligibility: vi.fn(), calibreMetadataRefreshPreview: vi.fn(), calibreMetadataRefreshApply: vi.fn(), calibreMetadataRefreshAttempts: vi.fn(),
   } }
 })
 vi.mock('react-i18next', () => {
@@ -32,6 +32,7 @@ const proposal: CalibreMetadataRefreshProposal = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(api.calibreMetadataRefreshEligibility).mockResolvedValue({ status: 'eligible', confidence: 'exact', matchMethod: 'identifier:isbn' })
   vi.mocked(api.calibreMetadataRefreshPreview).mockResolvedValue(proposal)
   vi.mocked(api.calibreMetadataRefreshAttempts).mockResolvedValue({ items: [] })
   vi.mocked(api.calibreMetadataRefreshApply).mockResolvedValue({ id: 1, proposalId: 10, actorUserId: 7, bookId: 5, calibreId: 17, action: 'apply_fields', outcome: 'applied', startedAt: '2026-01-01' })
@@ -43,6 +44,7 @@ it('shows book-level frozen preview, retained identifiers, withheld and missing 
   expect(api.calibreMetadataRefreshPreview).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: en.calibreAudit.refresh.title }))
   expect(screen.queryByRole('button', { name: en.calibreAudit.refresh.approve })).not.toBeInTheDocument()
+  await waitFor(() => expect(screen.getByRole('button', { name: en.calibreAudit.refresh.preview })).toBeEnabled())
   fireEvent.click(screen.getByRole('button', { name: en.calibreAudit.refresh.preview }))
   await waitFor(() => expect(screen.getAllByText(/unknown: retain-me/)).toHaveLength(2))
   expect(screen.getByText(/title: Owned title → Provider Work Title \(change\)/)).toBeInTheDocument()
@@ -55,6 +57,53 @@ it('shows book-level frozen preview, retained identifiers, withheld and missing 
   expect(onApplied).toHaveBeenCalledOnce()
 })
 
+it('shows the backend reason and disables preview for medium ownership without fetching', async () => {
+  vi.mocked(api.calibreMetadataRefreshEligibility).mockResolvedValue({
+    status: 'ineligible', confidence: 'medium', matchMethod: 'fallback_title_author',
+    reason: 'Metadata refresh requires an identifier-confirmed ownership match. This book is currently matched by title and author.',
+  })
+  render(<CalibreMetadataRefresh bookId={5} calibreId={17} enabled onApplied={vi.fn()} onNotice={vi.fn()} />)
+  fireEvent.click(screen.getByRole('button', { name: en.calibreAudit.refresh.title }))
+  await waitFor(() => expect(screen.getByText(/currently matched by title and author/)).toBeInTheDocument())
+  expect(screen.getByRole('button', { name: en.calibreAudit.refresh.preview })).toBeDisabled()
+  expect(api.calibreMetadataRefreshPreview).not.toHaveBeenCalled()
+  expect(api.calibreMetadataRefreshApply).not.toHaveBeenCalled()
+})
+
+it('does not offer approval if the server rejects a preview after an eligible hint', async () => {
+  vi.mocked(api.calibreMetadataRefreshPreview).mockRejectedValueOnce(new ApiError(409,
+    { code: 'ownership_ineligible', error: 'This book is currently matched by title and author.' }, 'Conflict'))
+  render(<CalibreMetadataRefresh bookId={5} calibreId={17} enabled onApplied={vi.fn()} onNotice={vi.fn()} />)
+  fireEvent.click(screen.getByRole('button', { name: en.calibreAudit.refresh.title }))
+  await waitFor(() => expect(screen.getByRole('button', { name: en.calibreAudit.refresh.preview })).toBeEnabled())
+  fireEvent.click(screen.getByRole('button', { name: en.calibreAudit.refresh.preview }))
+  await waitFor(() => expect(screen.getByText(/currently matched by title and author/)).toBeInTheDocument())
+  expect(screen.getByRole('button', { name: en.calibreAudit.refresh.preview })).toBeDisabled()
+  expect(screen.queryByRole('button', { name: en.calibreAudit.refresh.approve })).not.toBeInTheDocument()
+  expect(api.calibreMetadataRefreshApply).not.toHaveBeenCalled()
+})
+
+it('shows a real stale preview as stale rather than ownership-ineligible', async () => {
+  vi.mocked(api.calibreMetadataRefreshPreview).mockRejectedValueOnce(new ApiError(409,
+    { code: 'stale', error: 'metadata refresh proposal is stale; preview again' }, 'Conflict'))
+  render(<CalibreMetadataRefresh bookId={5} calibreId={17} enabled onApplied={vi.fn()} onNotice={vi.fn()} />)
+  fireEvent.click(screen.getByRole('button', { name: en.calibreAudit.refresh.title }))
+  await waitFor(() => expect(screen.getByRole('button', { name: en.calibreAudit.refresh.preview })).toBeEnabled())
+  fireEvent.click(screen.getByRole('button', { name: en.calibreAudit.refresh.preview }))
+  await waitFor(() => expect(screen.getByText(/proposal is stale; preview again/)).toBeInTheDocument())
+  expect(screen.getByRole('button', { name: en.calibreAudit.refresh.preview })).toBeDisabled()
+  expect(api.calibreMetadataRefreshApply).not.toHaveBeenCalled()
+})
+
+it('fails closed when the eligibility request fails', async () => {
+  vi.mocked(api.calibreMetadataRefreshEligibility).mockRejectedValueOnce(new Error('unavailable'))
+  render(<CalibreMetadataRefresh bookId={5} calibreId={17} enabled onApplied={vi.fn()} onNotice={vi.fn()} />)
+  fireEvent.click(screen.getByRole('button', { name: en.calibreAudit.refresh.title }))
+  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('unavailable'))
+  expect(screen.getByRole('button', { name: en.calibreAudit.refresh.preview })).toBeDisabled()
+  expect(api.calibreMetadataRefreshPreview).not.toHaveBeenCalled()
+})
+
 it('does not allow apply for no-result, wrong match, or a failed/partial attempt', async () => {
   const onNotice = vi.fn()
   vi.mocked(api.calibreMetadataRefreshPreview).mockResolvedValueOnce({ ...proposal, status: 'no_result', fields: [], reason: 'No result' })
@@ -63,9 +112,11 @@ it('does not allow apply for no-result, wrong match, or a failed/partial attempt
   vi.mocked(api.calibreMetadataRefreshApply).mockRejectedValueOnce(new Error('partial command failure'))
   render(<CalibreMetadataRefresh bookId={5} calibreId={17} enabled onApplied={vi.fn()} onNotice={onNotice} />)
   fireEvent.click(screen.getByRole('button', { name: en.calibreAudit.refresh.title }))
+  await waitFor(() => expect(screen.getByRole('button', { name: en.calibreAudit.refresh.preview })).toBeEnabled())
   fireEvent.click(screen.getByRole('button', { name: en.calibreAudit.refresh.preview }))
   await waitFor(() => expect(screen.getByText(/No result/)).toBeInTheDocument())
   expect(screen.queryByRole('button', { name: en.calibreAudit.refresh.approve })).not.toBeInTheDocument()
+  await waitFor(() => expect(screen.getByRole('button', { name: en.calibreAudit.refresh.preview })).toBeEnabled())
   fireEvent.click(screen.getByRole('button', { name: en.calibreAudit.refresh.preview }))
   await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/matched Calibre book changed/))
   fireEvent.click(screen.getByRole('button', { name: en.calibreAudit.refresh.preview }))

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, type CalibreMetadataRefreshAttempt, type CalibreMetadataRefreshProposal } from '../api/client'
+import { api, ApiError, type CalibreMetadataRefreshAttempt, type CalibreMetadataRefreshEligibility, type CalibreMetadataRefreshProposal } from '../api/client'
 
 // One refresh per matched book, not one per audit finding. The server rechecks
 // identity and writes only its frozen proposal; the browser sends no fields.
@@ -14,10 +14,20 @@ export default function CalibreMetadataRefresh({ bookId, calibreId, enabled, onA
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const [proposal, setProposal] = useState<CalibreMetadataRefreshProposal | null>(null)
+  const [eligibility, setEligibility] = useState<CalibreMetadataRefreshEligibility | null>(null)
   const [attempts, setAttempts] = useState<CalibreMetadataRefreshAttempt[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [revision, setRevision] = useState(0)
+  useEffect(() => {
+    if (!open || !enabled) return
+    let active = true
+    setEligibility(null)
+    api.calibreMetadataRefreshEligibility(bookId)
+      .then(result => { if (active) setEligibility(result) })
+      .catch(err => { if (active) setError(t('calibreAudit.refresh.eligibilityError', { error: err instanceof Error ? err.message : String(err) })) })
+    return () => { active = false }
+  }, [open, enabled, bookId, revision, t])
   useEffect(() => {
     if (!open || !enabled) return
     let active = true
@@ -27,17 +37,24 @@ export default function CalibreMetadataRefresh({ bookId, calibreId, enabled, onA
   }, [open, enabled, bookId, revision, t])
 
   const preview = async () => {
+    if (busy || eligibility?.status !== 'eligible') return
     setBusy(true); setError(''); setProposal(null)
     try {
       const next = await api.calibreMetadataRefreshPreview(bookId)
       if (next.bookId !== bookId || next.calibreId !== calibreId) throw new Error('The matched Calibre book changed; reload the review.')
       setProposal(next)
     } catch (err) {
-      setError(t('calibreAudit.refresh.error', { error: err instanceof Error ? err.message : String(err) }))
+      if (err instanceof ApiError && err.body.code === 'ownership_ineligible') {
+        setEligibility({ status: 'ineligible', reason: err.message })
+      } else if (err instanceof ApiError && err.body.code === 'stale') {
+        setEligibility({ status: 'stale', reason: err.message })
+      } else {
+        setError(t('calibreAudit.refresh.error', { error: err instanceof Error ? err.message : String(err) }))
+      }
     } finally { setBusy(false) }
   }
   const apply = async () => {
-    if (!proposal || proposal.status !== 'ready' || !proposal.fields.some(f => f.status === 'change')) return
+    if (eligibility?.status !== 'eligible' || !proposal || proposal.status !== 'ready' || !proposal.fields.some(f => f.status === 'change')) return
     setBusy(true); setError('')
     try {
       const result = await api.calibreMetadataRefreshApply(proposal.id, proposal.fingerprint)
@@ -58,7 +75,8 @@ export default function CalibreMetadataRefresh({ bookId, calibreId, enabled, onA
     {open && <div className="space-y-2">
       <p className="text-fg-muted">{t('calibreAudit.refresh.scope')}</p>
       {!enabled ? <p>{t('calibreAudit.refresh.disabled')}</p> : <>
-        <button type="button" onClick={preview} disabled={busy} className="rounded border px-2 py-1 disabled:opacity-50">{busy ? t('calibreAudit.refresh.previewing') : t('calibreAudit.refresh.preview')}</button>
+        <button type="button" onClick={preview} disabled={busy || eligibility?.status !== 'eligible'} className="rounded border px-2 py-1 disabled:opacity-50">{busy ? t('calibreAudit.refresh.previewing') : t('calibreAudit.refresh.preview')}</button>
+        {eligibility && eligibility.status !== 'eligible' && <p role="status">{eligibility.reason}</p>}
         {error && <p role="alert" className="text-red-600 dark:text-red-400">{error}</p>}
         {proposal && <div className="space-y-2">
           <p>{t('calibreAudit.refresh.identity', { work: proposal.rootKey, calibre: proposal.calibreId, edition: proposal.edition?.editionId || t('calibreAudit.unknown'), confidence: proposal.edition?.confidence || t('calibreAudit.unknown') })}</p>
@@ -79,7 +97,7 @@ export default function CalibreMetadataRefresh({ bookId, calibreId, enabled, onA
             {t('calibreAudit.refresh.field', { name: field.name, current: field.current || t('calibreAudit.refresh.missingValue'), fetched: field.fetched || t('calibreAudit.refresh.missingValue'), status: field.status })}
             {field.reason && <span className="block text-xs text-fg-muted">{t('calibreAudit.refresh.reason', { reason: field.reason })}</span>}
           </li>)}</ul>
-          {proposal.status === 'ready' && proposal.fields.some(field => field.status === 'change') &&
+          {eligibility?.status === 'eligible' && proposal.status === 'ready' && proposal.fields.some(field => field.status === 'change') &&
             <button type="button" onClick={apply} disabled={busy} className="rounded bg-emerald-700 text-white px-2 py-1 disabled:opacity-50">{busy ? t('calibreAudit.refresh.working') : t('calibreAudit.refresh.approve')}</button>}
         </div>}
         <details><summary className="cursor-pointer">{t('calibreAudit.refresh.history')}</summary>

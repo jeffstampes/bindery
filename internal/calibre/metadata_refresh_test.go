@@ -29,6 +29,7 @@ type refreshFakeCLI struct {
 	fetches         int
 	showExtra       string
 	unexpectedExtra string
+	fetchHook       func()
 }
 
 func fakeOPF(title, publisher, isbn, extra string) string {
@@ -48,6 +49,9 @@ func (f *refreshFakeCLI) Fetch(_ context.Context, _, isbn string) (string, strin
 	f.fetches++
 	if isbn != refreshISBN {
 		return "", "", fmt.Errorf("wrong lookup ISBN: %s", isbn)
+	}
+	if f.fetchHook != nil {
+		f.fetchHook()
 	}
 	return f.fetched, "Google answered; Open Library timed out", f.fetchErr
 }
@@ -158,6 +162,249 @@ func TestMetadataRefreshRequiresSeparateOptIn(t *testing.T) {
 	}
 	if cli.fetches != 0 || len(cli.calls) != 0 {
 		t.Fatalf("disabled feature invoked Calibre: %+v", cli)
+	}
+}
+
+// The ownership ISBN may be carried by an imported edition. The audit strips
+// that circular claim, leaving only a unique title/author corroboration.
+func TestMetadataRefreshExactISBNOwnershipMediumCorroboration(t *testing.T) {
+	f, cli, _ := refreshFixture(t, false)
+	ctx := context.Background()
+	if _, err := f.database.ExecContext(ctx, `UPDATE books SET title = 'Book One' WHERE id = ?`, f.book.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.database.ExecContext(ctx, `UPDATE editions SET foreign_id = 'calibre:1' WHERE id = ?`, f.edition.ID); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := f.crossRef.GetByBookID(ctx, f.book.ID)
+	if err != nil || ref == nil || ref.MatchMethod != "identifier:isbn" || ref.Confidence != models.CalibreMatchConfidenceExact {
+		t.Fatalf("expected persisted exact ISBN ownership: %+v %v", ref, err)
+	}
+	reader, err := OpenReader(f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	book, err := f.books.GetByID(ctx, f.book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	book.Editions, err = f.editions.ListByBook(ctx, f.book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	independent, err := MatchWork(ctx, auditMatchEvidence(book), reader)
+	_ = reader.Close()
+	if err != nil || independent.Status != models.CalibreMatchStatusMatched || independent.MatchMethod != "fallback_title_author" ||
+		independent.Confidence != models.CalibreMatchConfidenceMedium || independent.CalibreID != ref.CalibreID {
+		t.Fatalf("expected unique medium corroboration: %+v %v", independent, err)
+	}
+	p, err := f.svc.PreviewMetadataRefresh(ctx, f.book.ID)
+	if err != nil || p == nil || p.Status != "ready" || cli.fetches != 1 {
+		t.Fatalf("exact ownership should permit metadata lookup: %+v %v (fetches=%d)", p, err, cli.fetches)
+	}
+	attempt, err := f.svc.ApplyMetadataRefresh(ctx, p.ID, 7, p.Fingerprint)
+	if err != nil || attempt == nil || attempt.Outcome != "applied" || cli.fetches != 1 {
+		t.Fatalf("medium independent corroboration should survive apply without refetch: %+v %v (fetches=%d)", attempt, err, cli.fetches)
+	}
+	persisted, err := f.crossRef.GetByBookID(ctx, f.book.ID)
+	if err != nil || persisted == nil || persisted.Confidence != models.CalibreMatchConfidenceExact || persisted.MatchMethod != "identifier:isbn" {
+		t.Fatalf("preview changed ownership: %+v %v", persisted, err)
+	}
+}
+
+func TestMetadataRefreshExactProviderOwnership(t *testing.T) {
+	for _, tc := range []struct{ name, provider, canonical, foreignID, identifierType, identifierValue string }{
+		{"hardcover", "hardcover", "hardcover", "hc:11941", "hardcover", "11941"},
+		{"google alias", "google", "googlebooks", "gb:volume-42", "google", "volume-42"},
+		{"openlibrary alias", "ol", "openlibrary", "OL100W", "openlibrary", "OL100W"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, cli, _ := refreshFixture(t, false)
+			ctx := context.Background()
+			if _, err := f.database.ExecContext(ctx, `UPDATE books SET metadata_provider = ?, foreign_id = ? WHERE id = ?`,
+				tc.provider, tc.foreignID, f.book.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.database.ExecContext(ctx, `UPDATE editions SET isbn_13 = NULL WHERE id = ?`, f.edition.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := cli.conn.ExecContext(ctx, `INSERT INTO identifiers(book,type,val) VALUES (1,?,?)`, tc.identifierType, tc.identifierValue); err != nil {
+				t.Fatal(err)
+			}
+			f.book.MetadataProvider, f.book.ForeignID = tc.provider, tc.foreignID
+			reader, err := OpenReader(f.root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cb, err := reader.GetBook(ctx, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			match, err := MatchWork(ctx, f.book, reader)
+			_ = reader.Close()
+			if err != nil || match.Status != models.CalibreMatchStatusMatched || match.MatchMethod != "identifier:"+tc.identifierType || match.Confidence != models.CalibreMatchConfidenceExact {
+				t.Fatalf("provider ownership: %+v %v", match, err)
+			}
+			if err := f.crossRef.UpsertCrossReference(ctx, match.ToCrossReference()); err != nil {
+				t.Fatal(err)
+			}
+			raw := metadata.RawBookDiscovery{CanonicalProvider: tc.canonical, CanonicalForeignID: tc.foreignID,
+				Observations: []metadata.RawBookObservation{{Provider: tc.canonical, Method: metadata.RawMethodExactBook, Seed: tc.foreignID,
+					Outcome: metadata.RawOutcomeFound, Book: &models.Book{ForeignID: tc.foreignID, Title: "Provider Work Title", ProviderISBNs: []string{refreshISBN}}}}}
+			if err := db.NewCalibreIdentityRepo(f.database).ReplaceBatch(ctx, []models.CalibreIdentitySnapshot{buildIdentitySnapshot(f.book, cb, raw)}); err != nil {
+				t.Fatal(err)
+			}
+			p, err := f.svc.PreviewMetadataRefresh(ctx, f.book.ID)
+			if err != nil || p == nil || p.Status != "ready" || cli.fetches != 1 {
+				t.Fatalf("provider-ID preview: %+v %v (fetches=%d)", p, err, cli.fetches)
+			}
+		})
+	}
+}
+
+func TestMetadataRefreshOwnershipPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, confidence, status, reason string
+	}{
+		{"exact ISBN", "identifier:isbn", models.CalibreMatchConfidenceExact, "eligible", ""},
+		{"high", "identifier:hardcover", models.CalibreMatchConfidenceHigh, "eligible", ""},
+		{"medium title author", "fallback_title_author", models.CalibreMatchConfidenceMedium, "ineligible", "title and author"},
+		{"other medium method", "identifier:other", models.CalibreMatchConfidenceMedium, "ineligible", "identifier:other (medium confidence)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ref := &models.CalibreWorkCrossReference{Status: models.CalibreMatchStatusMatched, CalibreID: 1,
+				CalibreFingerprint: "fingerprint", MatchMethod: tc.method, Confidence: tc.confidence}
+			got := refreshOwnershipEligibility(ref)
+			if got.Status != tc.status || got.MatchMethod != tc.method || got.Confidence != tc.confidence ||
+				!strings.Contains(got.Reason, tc.reason) {
+				t.Fatalf("ownership policy: %+v", got)
+			}
+		})
+	}
+	if got := refreshOwnershipEligibility(&models.CalibreWorkCrossReference{Status: models.CalibreMatchStatusAmbiguous}); got.Status != "stale" {
+		t.Fatalf("ambiguous ownership: %+v", got)
+	}
+}
+
+func TestMetadataRefreshMediumOwnershipIsIneligible(t *testing.T) {
+	f, cli, _ := refreshFixture(t, false)
+	ctx := context.Background()
+	if _, err := f.database.ExecContext(ctx, `UPDATE books SET title = 'Book One' WHERE id = ?`, f.book.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.database.ExecContext(ctx, `UPDATE editions SET isbn_13 = NULL WHERE id = ?`, f.edition.ID); err != nil {
+		t.Fatal(err)
+	}
+	book, err := f.books.GetByID(ctx, f.book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	book.Editions, err = f.editions.ListByBook(ctx, f.book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := OpenReader(f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	match, err := MatchWork(ctx, book, reader)
+	_ = reader.Close()
+	if err != nil || match.Confidence != models.CalibreMatchConfidenceMedium || match.MatchMethod != "fallback_title_author" {
+		t.Fatalf("expected genuine medium ownership: %+v %v", match, err)
+	}
+	if err := f.crossRef.UpsertCrossReference(ctx, match.ToCrossReference()); err != nil {
+		t.Fatal(err)
+	}
+	eligibility, err := f.svc.MetadataRefreshEligibility(ctx, f.book.ID)
+	if err != nil || eligibility.Status != "ineligible" || eligibility.MatchMethod != "fallback_title_author" ||
+		eligibility.Confidence != models.CalibreMatchConfidenceMedium || !strings.Contains(eligibility.Reason, "title and author") {
+		t.Fatalf("medium ownership policy: %+v %v", eligibility, err)
+	}
+	if _, err := f.svc.PreviewMetadataRefresh(ctx, f.book.ID); !errors.Is(err, ErrMetadataRefreshIneligible) ||
+		errors.Is(err, ErrMetadataRefreshStale) || !strings.Contains(err.Error(), "title and author") || cli.fetches != 0 {
+		t.Fatalf("medium ownership fetched or reported stale: %v (fetches=%d)", err, cli.fetches)
+	}
+}
+
+func TestMetadataRefreshChangedCurrentOwnershipIsStale(t *testing.T) {
+	f, cli, _ := refreshFixture(t, false)
+	ctx := context.Background()
+	// The persisted link is exact, but its sole current ISBN source has gone.
+	// A now-unique medium fallback cannot inherit the old write authority.
+	if _, err := f.database.ExecContext(ctx, `UPDATE books SET title = 'Book One' WHERE id = ?`, f.book.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.database.ExecContext(ctx, `UPDATE editions SET isbn_13 = NULL WHERE id = ?`, f.edition.ID); err != nil {
+		t.Fatal(err)
+	}
+	eligibility, err := f.svc.MetadataRefreshEligibility(ctx, f.book.ID)
+	if err != nil || eligibility.Status != "eligible" {
+		t.Fatalf("persisted hint: %+v %v", eligibility, err)
+	}
+	if _, err := f.svc.PreviewMetadataRefresh(ctx, f.book.ID); !errors.Is(err, ErrMetadataRefreshStale) || cli.fetches != 0 {
+		t.Fatalf("downgraded live ownership allowed refresh: %v (fetches=%d)", err, cli.fetches)
+	}
+}
+
+func TestMetadataRefreshIndependentRematchMustSelectSameUniqueTarget(t *testing.T) {
+	for _, tc := range []struct{ name, bookTitle, competingTitle string }{
+		{"ambiguous", "Book One", "Book One"},
+		{"unmatched", "Unrelated Work", ""},
+		{"different Calibre ID", "Book Two", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, cli, _ := refreshFixture(t, false)
+			ctx := context.Background()
+			if _, err := f.database.ExecContext(ctx, `UPDATE books SET title = ? WHERE id = ?`, tc.bookTitle, f.book.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.database.ExecContext(ctx, `UPDATE editions SET foreign_id = 'calibre:1' WHERE id = ?`, f.edition.ID); err != nil {
+				t.Fatal(err)
+			}
+			if tc.competingTitle != "" {
+				if _, err := cli.conn.ExecContext(ctx, `UPDATE books SET title = ? WHERE id = 2`, tc.competingTitle); err != nil {
+					t.Fatal(err)
+				}
+			}
+			reader, err := OpenReader(f.root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			book, err := f.books.GetByID(ctx, f.book.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			book.Editions, err = f.editions.ListByBook(ctx, f.book.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ownership, err := MatchWork(ctx, book, reader)
+			if err != nil || ownership.CalibreID != 1 || ownership.Confidence != models.CalibreMatchConfidenceExact {
+				t.Fatalf("ownership should remain exact: %+v %v", ownership, err)
+			}
+			independent, err := MatchWork(ctx, auditMatchEvidence(book), reader)
+			_ = reader.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch tc.name {
+			case "ambiguous":
+				if independent.Status != models.CalibreMatchStatusAmbiguous {
+					t.Fatalf("corroboration: %+v", independent)
+				}
+			case "unmatched":
+				if independent.Status != "unmatched" {
+					t.Fatalf("corroboration: %+v", independent)
+				}
+			default:
+				if independent.Status != models.CalibreMatchStatusMatched || independent.CalibreID != 2 {
+					t.Fatalf("corroboration: %+v", independent)
+				}
+			}
+			if _, err := f.svc.PreviewMetadataRefresh(ctx, f.book.ID); !errors.Is(err, ErrMetadataRefreshStale) || cli.fetches != 0 {
+				t.Fatalf("unsafe independent rematch: %v (fetches=%d)", err, cli.fetches)
+			}
+		})
 	}
 }
 
@@ -381,6 +628,45 @@ func TestMetadataRefreshLookupOutcomesAndIdentityMismatch(t *testing.T) {
 			}
 			if _, err := f.svc.ApplyMetadataRefresh(context.Background(), p.ID, 1, p.Fingerprint); !errors.Is(err, ErrMetadataRefreshStale) {
 				t.Fatalf("ineligible applied: %v", err)
+			}
+		})
+	}
+}
+
+func TestMetadataRefreshPreviewRejectsChangedOPF(t *testing.T) {
+	f, cli, repo := refreshFixture(t, false)
+	cli.fetchHook = func() { cli.showExtra = `<meta name="calibre:user_metadata:#review" content="changed"/>` }
+	if _, err := f.svc.PreviewMetadataRefresh(context.Background(), f.book.ID); !errors.Is(err, ErrMetadataRefreshStale) || cli.fetches != 1 {
+		t.Fatalf("OPF changed during lookup: %v (fetches=%d)", err, cli.fetches)
+	}
+	records, err := repo.ListAttempts(context.Background(), f.book.ID)
+	if err != nil || len(records) != 0 {
+		t.Fatalf("unexpected write attempt: %+v %v", records, err)
+	}
+}
+
+func TestMetadataRefreshPreviewRequiresCurrentRootAndFingerprint(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(context.Context, auditTestFixture, *refreshFakeCLI) error
+	}{
+		{"missing root", func(ctx context.Context, f auditTestFixture, _ *refreshFakeCLI) error {
+			_, err := f.database.ExecContext(ctx, `UPDATE calibre_identity_evidence SET status = 'candidate' WHERE book_id = ? AND method = ?`, f.book.ID, metadata.RawMethodExactBook)
+			return err
+		}},
+		{"changed Calibre fingerprint", func(ctx context.Context, _ auditTestFixture, cli *refreshFakeCLI) error {
+			_, err := cli.conn.ExecContext(ctx, `UPDATE books SET title = 'Edited after reconciliation' WHERE id = 1`)
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, cli, _ := refreshFixture(t, false)
+			ctx := context.Background()
+			if err := tc.change(ctx, f, cli); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.svc.PreviewMetadataRefresh(ctx, f.book.ID); !errors.Is(err, ErrMetadataRefreshStale) || cli.fetches != 0 {
+				t.Fatalf("stale preview: %v (fetches=%d)", err, cli.fetches)
 			}
 		})
 	}
