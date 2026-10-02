@@ -123,6 +123,7 @@
       "success": "The approved changes were verified against the Calibre book.",
       "failure": "Refresh was not confirmed: {{error}}. Inspect the attempt and Calibre book before retrying.",
       "error": "Cannot preview metadata: {{error}}",
+      "eligibilityError": "Cannot check refresh eligibility: {{error}}",
       "none": "No refresh attempts yet."
     },
     "calibreId": "Calibre book #{{id}}",

@@ -252,6 +252,13 @@ export interface CalibreIdentifierAttempt {
   createdAt: string
 }
 
+export interface CalibreMetadataRefreshEligibility {
+  status: 'eligible' | 'ineligible' | 'stale'
+  reason?: string
+  matchMethod?: string
+  confidence?: string
+}
+
 export interface CalibreMetadataRefreshField {
   name: string
   current: string
@@ -371,6 +378,8 @@ export const calibreApi = {
     request<CalibreIdentifierAddResult>(`/calibre/audit/${id}/identifier-add`, { method: 'POST', body: JSON.stringify(body) }),
   calibreAuditIdentifierAttempts: (id: number) =>
     request<{ items: CalibreIdentifierAttempt[] }>(`/calibre/audit/${id}/identifier-attempts`),
+  calibreMetadataRefreshEligibility: (bookId: number) =>
+    request<CalibreMetadataRefreshEligibility>(`/calibre/metadata-refresh/${bookId}/eligibility`),
   calibreMetadataRefreshPreview: (bookId: number) =>
     request<CalibreMetadataRefreshProposal>(`/calibre/metadata-refresh/${bookId}/preview`, { method: 'POST' }),
   calibreMetadataRefreshApply: (id: number, fingerprint: string) =>

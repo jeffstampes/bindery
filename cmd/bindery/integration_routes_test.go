@@ -81,6 +81,9 @@ func (h *stubIntegrationHandler) IdentifierAdd(w http.ResponseWriter, _ *http.Re
 func (h *stubIntegrationHandler) IdentifierAttempts(w http.ResponseWriter, _ *http.Request) {
 	h.record("identifier-attempts", w)
 }
+func (h *stubIntegrationHandler) RefreshEligibility(w http.ResponseWriter, _ *http.Request) {
+	h.record("refresh-eligibility", w)
+}
 func (h *stubIntegrationHandler) RefreshPreview(w http.ResponseWriter, _ *http.Request) {
 	h.record("refresh-preview", w)
 }
@@ -132,6 +135,7 @@ func TestIntegrationRoutesRequireAdmin(t *testing.T) {
 		{"calibre identifier proposals", http.MethodGet, "/calibre/audit/1/identifier-proposals"},
 		{"calibre identifier add", http.MethodPost, "/calibre/audit/1/identifier-add"},
 		{"calibre identifier attempts", http.MethodGet, "/calibre/audit/1/identifier-attempts"},
+		{"calibre refresh eligibility", http.MethodGet, "/calibre/metadata-refresh/1/eligibility"},
 		{"calibre refresh preview", http.MethodPost, "/calibre/metadata-refresh/1/preview"},
 		{"calibre refresh apply", http.MethodPost, "/calibre/metadata-refresh/proposals/1/apply"},
 		{"calibre refresh attempts", http.MethodGet, "/calibre/metadata-refresh/1/attempts"},
@@ -186,6 +190,7 @@ func TestIntegrationRoutesAllowAdmin(t *testing.T) {
 		{http.MethodGet, "/calibre/audit/1/identifier-proposals", "identifier-proposals"},
 		{http.MethodPost, "/calibre/audit/1/identifier-add", "identifier-add"},
 		{http.MethodGet, "/calibre/audit/1/identifier-attempts", "identifier-attempts"},
+		{http.MethodGet, "/calibre/metadata-refresh/1/eligibility", "refresh-eligibility"},
 		{http.MethodPost, "/calibre/metadata-refresh/1/preview", "refresh-preview"},
 		{http.MethodPost, "/calibre/metadata-refresh/proposals/1/apply", "refresh-apply"},
 		{http.MethodGet, "/calibre/metadata-refresh/1/attempts", "refresh-attempts"},

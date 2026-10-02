@@ -159,11 +159,17 @@ and individually approved #28 identifier additions are separate exceptions.
 
 `calibre.metadata_refresh_enabled` is independent and defaults off. An admin
 opens a matched book on the audit review page, requests a per-book preview,
-and approves a frozen proposal. Bindery verifies the current ownership match
-and exact canonical-work lookup *before* asking Calibre's metadata plugins to
-search by a unique rooted ISBN. A lookup result that supplies no matching ISBN
-cannot become a write proposal. Fetched metadata never roots or redirects the
-Bindery work identity, and edition confidence comes only from #29.
+and approves a frozen proposal. An exact/high persisted ownership match
+establishes write eligibility; a medium title/author ownership match does not.
+The independent audit rematch removes circular CWA ISBN/ASIN claims and must
+uniquely corroborate the **same** Calibre book, but may itself have medium
+confidence from title/author. Neither check upgrades or downgrades the stored
+ownership link. The read-only eligibility hint disables preview for known
+ineligible links; preview and apply still recheck live ownership and identity.
+Bindery verifies the canonical-work root *before* asking Calibre's metadata
+plugins to search by a unique rooted ISBN. A lookup result that supplies no
+matching ISBN cannot become a write proposal. Fetched metadata never roots or
+redirects the Bindery work identity, and edition confidence comes only from #29.
 
 The first write slice is **title** only when the fetched title matches the
 rooted work or eligible owned edition; **publisher** additionally needs an
